@@ -1,19 +1,14 @@
-# app.py (v2)
+# app.py (v3)
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
 
-st.set_page_config(page_title="GGV vs. Mieterstrom – Szenariorechner (v2)", layout="wide")
+st.set_page_config(page_title="GGV vs. Mieterstrom – Szenariorechner (v3)", layout="wide")
 
 # -----------------------------
 # Helper functions
 # -----------------------------
-def annuity_factor(rate, n):
-    if rate == 0:
-        return 1/n if n>0 else 0
-    return (rate * (1 + rate)**n) / ((1 + rate)**n - 1)
-
 def cashflow_summary(df, discount_rate):
     npv = 0.0
     cum = 0.0
@@ -157,7 +152,7 @@ with st.sidebar.expander("Kosten, Laufzeit & Finanzen", expanded=True):
     discount = st.number_input("Diskontsatz [%/a] (NPV)", min_value=0.0, value=6.0, step=0.1)
 
 with st.sidebar.expander("Inflation & Wachstumsannahmen", expanded=True):
-    global_infl = st.number_input("Globale Inflationsrate [%/a] (optional Override)", min_value=0.0, value=2.0, step=0.1)
+    global_infl = st.number_input("Globale Inflationsrate [%/a] (Optional-Override)", min_value=0.0, value=2.0, step=0.1)
     use_global_infl = st.checkbox("Globale Inflation für Kosten UND Preise verwenden", value=True)
     if use_global_infl:
         inflation = global_infl
@@ -231,61 +226,67 @@ df_ms, npv_ms, pb_ms = build_scenario(
 df_all = pd.concat([df_ggv, df_ms], ignore_index=True)
 
 # -----------------------------
-# KPIs: NE (pro Einheit) und LG (Liegenschaft gesamt)
+# KPI CARDS (über den Diagrammen): NE und LG
 # -----------------------------
 ne_npv_ggv = npv_ggv / n_units
 ne_npv_ms = npv_ms / n_units
-
 pb1 = "n/a" if pb_ggv is None else f"{pb_ggv} a"
 pb2 = "n/a" if pb_ms is None else f"{pb_ms} a"
 
-st.markdown("### Übersicht – KPIs (oberhalb der Diagramme)")
+st.subheader("Übersicht – KPIs")
 
-cap_label = f"Mieterstrom‑Preisdeckel [ct/kWh]: <strong>{mieterstrom_cap:.1f}</strong>"
+# NE row
+st.markdown("**NE – pro Einheit/Wohnung**")
+c1, c2, c3, c4 = st.columns(4)
+with c1:
+    st.markdown(f"<div style='border:1px solid #e5e7eb; padding:10px; border-radius:12px; text-align:center;'>"
+                f"<div style='font-weight:600;'>Mieterstrom‑Preisdeckel [ct/kWh]</div>"
+                f"<div style='font-size:22px;'>{mieterstrom_cap:.1f}</div></div>", unsafe_allow_html=True)
+with c2:
+    st.markdown(f"<div style='border:1px solid #e5e7eb; padding:10px; border-radius:12px; text-align:center;'>"
+                f"<div style='font-weight:600;'>NPV GGV [€]</div>"
+                f"<div style='font-size:22px;'>{ne_npv_ggv:,.0f}</div></div>", unsafe_allow_html=True)
+with c3:
+    st.markdown(f"<div style='border:1px solid #e5e7eb; padding:10px; border-radius:12px; text-align:center;'>"
+                f"<div style='font-weight:600;'>NPV Mieterstrom [€]</div>"
+                f"<div style='font-size:22px;'>{ne_npv_ms:,.0f}</div></div>", unsafe_allow_html=True)
+with c4:
+    st.markdown(f"<div style='border:1px solid #e5e7eb; padding:10px; border-radius:12px; text-align:center;'>"
+                f"<div style='font-weight:600;'>Payback: GGV / MS</div>"
+                f"<div style='font-size:22px;'>{pb1} / {pb2}</div></div>", unsafe_allow_html=True)
 
-ne_block = f"""
-<div style="padding:8px; border:1px solid #e5e7eb; border-radius:10px; margin-bottom:4px;">
-  <div style="font-weight:600;">NE – pro Einheit/Wohnung</div>
-  <div>NPV GGV [€]: <strong>{ne_npv_ggv:,.0f}</strong> &nbsp;&nbsp; | &nbsp;&nbsp;
-      NPV Mieterstrom [€]: <strong>{ne_npv_ms:,.0f}</strong> &nbsp;&nbsp; | &nbsp;&nbsp;
-      Payback: GGV / MS: <strong>{pb1} / {pb2}</strong></div>
-  <div style="margin-top:4px;">{cap_label}</div>
-</div>
-"""
-
-lg_block = f"""
-<div style="padding:10px; border:1px solid #e5e7eb; border-radius:10px; background:#f8fbff;">
-  <div style="font-weight:700; color:#1f4acc;">LG – Gesamtobjekt (kumuliert)</div>
-  <div style="font-weight:700; color:#1f4acc;">
-    NPV GGV [€]: {npv_ggv:,.0f} &nbsp;&nbsp; | &nbsp;&nbsp;
-    NPV Mieterstrom [€]: {npv_ms:,.0f} &nbsp;&nbsp; | &nbsp;&nbsp;
-    Payback: GGV / MS: {pb1} / {pb2}
-  </div>
-</div>
-"""
-
-st.markdown(ne_block, unsafe_allow_html=True)
-st.markdown(lg_block, unsafe_allow_html=True)
+# LG row (blue, bolder)
+st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
+st.markdown("**LG – Gesamtobjekt (kumuliert)**")
+d1, d2, d3, d4 = st.columns(4)
+with d1:
+    st.markdown(f"<div style='border:1px solid #c7d2fe; padding:10px; border-radius:12px; text-align:center; background:#eef2ff;'>"
+                f"<div style='font-weight:700; color:#1f4acc;'>Mieterstrom‑Preisdeckel [ct/kWh]</div>"
+                f"<div style='font-size:22px; font-weight:700; color:#1f4acc;'>{mieterstrom_cap:.1f}</div></div>", unsafe_allow_html=True)
+with d2:
+    st.markdown(f"<div style='border:1px solid #c7d2fe; padding:10px; border-radius:12px; text-align:center; background:#eef2ff;'>"
+                f"<div style='font-weight:700; color:#1f4acc;'>NPV GGV [€]</div>"
+                f"<div style='font-size:22px; font-weight:700; color:#1f4acc;'>{npv_ggv:,.0f}</div></div>", unsafe_allow_html=True)
+with d3:
+    st.markdown(f"<div style='border:1px solid #c7d2fe; padding:10px; border-radius:12px; text-align:center; background:#eef2ff;'>"
+                f"<div style='font-weight:700; color:#1f4acc;'>NPV Mieterstrom [€]</div>"
+                f"<div style='font-size:22px; font-weight:700; color:#1f4acc;'>{npv_ms:,.0f}</div></div>", unsafe_allow_html=True)
+with d4:
+    st.markdown(f"<div style='border:1px solid #c7d2fe; padding:10px; border-radius:12px; text-align:center; background:#eef2ff;'>"
+                f"<div style='font-weight:700; color:#1f4acc;'>Payback: GGV / MS</div>"
+                f"<div style='font-size:22px; font-weight:700; color:#1f4acc;'>{pb1} / {pb2}</div></div>", unsafe_allow_html=True)
 
 # -----------------------------
-# Rendite für Eigentümer über Jahre (2–30)
+# Rendite (2–30 Jahre)
 # -----------------------------
 st.markdown("### Wirtschaftlichkeit / Rendite Eigentümer über Jahre")
 years = st.slider("Analysehorizont [Jahre]", min_value=2, max_value=30, value=10, step=1)
-
-def roi_over_horizon(df, years):
-    capex = float(df.loc[df["Jahr"]==0, "CAPEX [€]"].sum())
-    cum_net = float(df[df["Jahr"]<=years]["Netto Cashflow"].sum())
-    if capex <= 0:
-        return None
-    return cum_net / capex
-
 roi_ggv = roi_over_horizon(df_ggv, years)
 roi_ms = roi_over_horizon(df_ms, years)
 
-colr1, colr2 = st.columns(2)
-colr1.metric(f"ROI GGV bis Jahr {years}", f"{(roi_ggv*100):.1f}%")
-colr2.metric(f"ROI Mieterstrom bis Jahr {years}", f"{(roi_ms*100):.1f}%")
+r1, r2 = st.columns(2)
+r1.metric(f"ROI GGV bis Jahr {years}", f"{(roi_ggv*100):.1f}%")
+r2.metric(f"ROI Mieterstrom bis Jahr {years}", f"{(roi_ms*100):.1f}%")
 
 years_range = list(range(2, min(int(lifetime), 30)+1))
 roi_curve = pd.DataFrame({
@@ -297,7 +298,7 @@ fig_roi = px.line(roi_curve.melt(id_vars="Jahr", var_name="Szenario", value_name
                   x="Jahr", y="ROI [%]", color="Szenario", title="ROI-Verlauf (Eigentümer)")
 st.plotly_chart(fig_roi, use_container_width=True)
 
-st.caption("Hinweis: ROI = kumulierter Netto-Cashflow (inkl. Jahr 0) dividiert durch CAPEX. NPV/Payback wie oben. Inflations-Override wirkt auf Kosten und Preise, wenn aktiviert.")
+st.caption("Hinweis: ROI = kumulierter Netto-Cashflow (inkl. Jahr 0) ÷ CAPEX. Inflations-Override wirkt auf Kosten und Erlöse.")
 
 # -----------------------------
 # Charts
@@ -305,24 +306,23 @@ st.caption("Hinweis: ROI = kumulierter Netto-Cashflow (inkl. Jahr 0) dividiert d
 tab1, tab2, tab3 = st.tabs(["Cashflows", "Energieflüsse", "Jahreswerte"])
 
 with tab1:
-    df_plot = df_all[df_all["Jahr"]>0].copy()
+    df_plot = pd.concat([df_ggv[df_ggv["Jahr"]>0], df_ms[df_ms["Jahr"]>0]], ignore_index=True)
     fig_cf = px.line(df_plot, x="Jahr", y="Netto Cashflow", color="Szenario", title="Jährlicher Netto-Cashflow")
     st.plotly_chart(fig_cf, use_container_width=True)
 
-    df_cum = df_plot.groupby(["Szenario"])["Netto Cashflow"].cumsum().reset_index()
-    df_cum["Jahr"] = df_plot["Jahr"].values
-    df_cum["Szenario"] = df_plot["Szenario"].values
-    fig_cum = px.line(df_cum, x="Jahr", y="Netto Cashflow", color="Szenario", title="Kumulierter Cashflow")
+    df_cum = df_plot.copy()
+    df_cum["CumCF"] = df_cum.groupby("Szenario")["Netto Cashflow"].cumsum()
+    fig_cum = px.line(df_cum, x="Jahr", y="CumCF", color="Szenario", title="Kumulierter Cashflow")
     st.plotly_chart(fig_cum, use_container_width=True)
 
 with tab2:
-    df_energy = df_all[df_all["Jahr"]>0].copy()
+    df_energy = pd.concat([df_ggv[df_ggv["Jahr"]>0], df_ms[df_ms["Jahr"]>0]], ignore_index=True)
     df_energy = df_energy.melt(id_vars=["Szenario","Jahr"], value_vars=["EV [kWh]","Einspeisung [kWh]"], var_name="Art", value_name="kWh")
     fig_e = px.area(df_energy, x="Jahr", y="kWh", color="Art", facet_col="Szenario", facet_col_wrap=2, title="Energieflüsse EV vs. Einspeisung")
     st.plotly_chart(fig_e, use_container_width=True)
 
 with tab3:
-    st.dataframe(df_all.style.format({
+    st.dataframe(pd.concat([df_ggv, df_ms], ignore_index=True).style.format({
         "Produktion [kWh]":"{:,.0f}",
         "EV [kWh]":"{:,.0f}",
         "Einspeisung [kWh]":"{:,.0f}",
@@ -337,7 +337,7 @@ with tab3:
 
 st.download_button(
     "📤 Export: Jahreswerte (CSV)",
-    data=df_all.to_csv(index=False).encode("utf-8"),
+    data=pd.concat([df_ggv, df_ms], ignore_index=True).to_csv(index=False).encode("utf-8"),
     file_name="szenario_jahreswerte.csv",
     mime="text/csv"
 )

@@ -1,9 +1,9 @@
-# GGV vs. Mieterstrom – Szenariorechner (v2)
+# GGV vs. Mieterstrom – Szenariorechner (v3)
 
-**Neu in v2**
-- **NE/LG-KPIs** über den Diagrammen: pro Einheit (NE) und kumuliert für das Gesamtobjekt (LG, blau/fett).
-- **Eigentümer-Rendite** über frei wählbaren **Analysehorizont (2–30 Jahre)** inkl. ROI-Kennzahl und Kurve.
-- **Globale Inflationsrate** als Override für **Kosten** und **Preise**.
+**Änderungen (Wunsch umgesetzt):**
+- **NE-Karten** (pro Einheit/Wohnung) **oben über den Diagrammen** mit **stapelbaren Labeln & Werten**.
+- **LG-Karten** (Gesamtobjekt, kumuliert) direkt darunter – **fetter & blau**.
+- Beibehalt: **ROI-Slider (2–30 Jahre)**, globale **Inflations-Override** für Kosten & Erlöse, alle Charts.
 
 ## Start
 ```bash
