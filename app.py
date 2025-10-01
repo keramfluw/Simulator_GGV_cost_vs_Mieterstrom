@@ -1,13 +1,13 @@
-# app.py (v3)
+# app.py (v4 – NE/LG wording & € with 2 decimals, DE formatting)
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
 
-st.set_page_config(page_title="GGV vs. Mieterstrom – Szenariorechner (v3)", layout="wide")
+st.set_page_config(page_title="GGV vs. Mieterstrom – Szenariorechner (v4)", layout="wide")
 
 # -----------------------------
-# Helper functions
+# Helpers
 # -----------------------------
 def cashflow_summary(df, discount_rate):
     npv = 0.0
@@ -122,13 +122,22 @@ def roi_over_horizon(df, years):
         return None
     return cum_net / capex
 
+def eur2(value, german=True):
+    """Format value to Euro with two decimals. German style if german=True."""
+    if value is None:
+        return "n/a"
+    s = f"{value:,.2f}"
+    if german:
+        s = s.replace(",", "X").replace(".", ",").replace("X", ".")
+    return s
+
 # -----------------------------
 # Sidebar Inputs
 # -----------------------------
 st.sidebar.title("Eingaben – Anlage & Preise")
 
 with st.sidebar.expander("Projekt & Anlage", expanded=True):
-    n_units = st.number_input("Anzahl Wohneinheiten (für NE/LG)", min_value=1, value=30, step=1)
+    n_units = st.number_input("Anzahl Nutzeinheiten (NE)", min_value=1, value=30, step=1)
     kWp = st.number_input("Anlagengröße [kWp]", min_value=1.0, value=99.0, step=1.0)
     specific_yield = st.number_input("Spezifischer Ertrag [kWh/kWp*a]", min_value=600.0, value=1000.0, step=10.0)
     sc_share = st.slider("Eigenverbrauchsanteil [%] (wenn keine Batterie-Optimierung)", 0, 100, 35)
@@ -173,7 +182,7 @@ with st.sidebar.expander("Batterie / EV-Optimierung", expanded=False):
 mieterstrom_cap = 0.9 * grundversorgung_ct
 
 # -----------------------------
-# Build Scenarios
+# Build scenarios
 # -----------------------------
 df_ggv, npv_ggv, pb_ggv = build_scenario(
     label="GGV",
@@ -223,10 +232,8 @@ df_ms, npv_ms, pb_ms = build_scenario(
     battery_note=battery_note
 )
 
-df_all = pd.concat([df_ggv, df_ms], ignore_index=True)
-
 # -----------------------------
-# KPI CARDS (über den Diagrammen): NE und LG
+# KPIs – NE (Nutzeinheit) & LG (Liegenschaft)
 # -----------------------------
 ne_npv_ggv = npv_ggv / n_units
 ne_npv_ms = npv_ms / n_units
@@ -236,7 +243,7 @@ pb2 = "n/a" if pb_ms is None else f"{pb_ms} a"
 st.subheader("Übersicht – KPIs")
 
 # NE row
-st.markdown("**NE – pro Einheit/Wohnung**")
+st.markdown("**NE – Nutzeinheit (pro Einheit)**")
 c1, c2, c3, c4 = st.columns(4)
 with c1:
     st.markdown(f"<div style='border:1px solid #e5e7eb; padding:10px; border-radius:12px; text-align:center;'>"
@@ -245,19 +252,19 @@ with c1:
 with c2:
     st.markdown(f"<div style='border:1px solid #e5e7eb; padding:10px; border-radius:12px; text-align:center;'>"
                 f"<div style='font-weight:600;'>NPV GGV [€]</div>"
-                f"<div style='font-size:22px;'>{ne_npv_ggv:,.0f}</div></div>", unsafe_allow_html=True)
+                f"<div style='font-size:22px;'>{eur2(ne_npv_ggv)}</div></div>", unsafe_allow_html=True)
 with c3:
     st.markdown(f"<div style='border:1px solid #e5e7eb; padding:10px; border-radius:12px; text-align:center;'>"
                 f"<div style='font-weight:600;'>NPV Mieterstrom [€]</div>"
-                f"<div style='font-size:22px;'>{ne_npv_ms:,.0f}</div></div>", unsafe_allow_html=True)
+                f"<div style='font-size:22px;'>{eur2(ne_npv_ms)}</div></div>", unsafe_allow_html=True)
 with c4:
     st.markdown(f"<div style='border:1px solid #e5e7eb; padding:10px; border-radius:12px; text-align:center;'>"
                 f"<div style='font-weight:600;'>Payback: GGV / MS</div>"
                 f"<div style='font-size:22px;'>{pb1} / {pb2}</div></div>", unsafe_allow_html=True)
 
-# LG row (blue, bolder)
+# LG row
 st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
-st.markdown("**LG – Gesamtobjekt (kumuliert)**")
+st.markdown("**LG – Liegenschaft (kumuliert)**")
 d1, d2, d3, d4 = st.columns(4)
 with d1:
     st.markdown(f"<div style='border:1px solid #c7d2fe; padding:10px; border-radius:12px; text-align:center; background:#eef2ff;'>"
@@ -266,11 +273,11 @@ with d1:
 with d2:
     st.markdown(f"<div style='border:1px solid #c7d2fe; padding:10px; border-radius:12px; text-align:center; background:#eef2ff;'>"
                 f"<div style='font-weight:700; color:#1f4acc;'>NPV GGV [€]</div>"
-                f"<div style='font-size:22px; font-weight:700; color:#1f4acc;'>{npv_ggv:,.0f}</div></div>", unsafe_allow_html=True)
+                f"<div style='font-size:22px; font-weight:700; color:#1f4acc;'>{eur2(npv_ggv)}</div></div>", unsafe_allow_html=True)
 with d3:
     st.markdown(f"<div style='border:1px solid #c7d2fe; padding:10px; border-radius:12px; text-align:center; background:#eef2ff;'>"
                 f"<div style='font-weight:700; color:#1f4acc;'>NPV Mieterstrom [€]</div>"
-                f"<div style='font-size:22px; font-weight:700; color:#1f4acc;'>{npv_ms:,.0f}</div></div>", unsafe_allow_html=True)
+                f"<div style='font-size:22px; font-weight:700; color:#1f4acc;'>{eur2(npv_ms)}</div></div>", unsafe_allow_html=True)
 with d4:
     st.markdown(f"<div style='border:1px solid #c7d2fe; padding:10px; border-radius:12px; text-align:center; background:#eef2ff;'>"
                 f"<div style='font-weight:700; color:#1f4acc;'>Payback: GGV / MS</div>"
@@ -298,7 +305,7 @@ fig_roi = px.line(roi_curve.melt(id_vars="Jahr", var_name="Szenario", value_name
                   x="Jahr", y="ROI [%]", color="Szenario", title="ROI-Verlauf (Eigentümer)")
 st.plotly_chart(fig_roi, use_container_width=True)
 
-st.caption("Hinweis: ROI = kumulierter Netto-Cashflow (inkl. Jahr 0) ÷ CAPEX. Inflations-Override wirkt auf Kosten und Erlöse.")
+st.caption("Hinweis: NE = Nutzeinheit (pro Einheit). LG = Liegenschaft (Summe aller NE). Euro‑Werte mit zwei Dezimalstellen in deutscher Darstellung.")
 
 # -----------------------------
 # Charts

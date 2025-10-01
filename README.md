@@ -1,14 +1,8 @@
-# GGV vs. Mieterstrom – Szenariorechner (v3)
+# GGV vs. Mieterstrom – Szenariorechner (v4)
 
-**Änderungen (Wunsch umgesetzt):**
-- **NE-Karten** (pro Einheit/Wohnung) **oben über den Diagrammen** mit **stapelbaren Labeln & Werten**.
-- **LG-Karten** (Gesamtobjekt, kumuliert) direkt darunter – **fetter & blau**.
-- Beibehalt: **ROI-Slider (2–30 Jahre)**, globale **Inflations-Override** für Kosten & Erlöse, alle Charts.
+**Anpassungen gemäß Wording:**
+- **NE = Nutzeinheit (pro Einheit)**, **LG = Liegenschaft (Summe aller NE)**.
+- **Euro-Werte** für NE & LG **mit zwei Dezimalstellen** (deutsche Formatierung).
+- Eingabe links: **Anzahl Nutzeinheiten (NE)**.
 
-## Start
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-streamlit run app.py
-```
+Weitere Features aus v3 bleiben: ROI-Slider (2–30 Jahre), globaler Inflations-Override, Cashflow-/Energie-Charts, CSV-Export.
