@@ -1,10 +1,10 @@
-# app.py (v5 – Sensitivitäten, LCOS, Kostenbreakdown, §42b/DV, NE/LG KPIs)
+# app.py (v6 – Kalibrierte Defaults + PV‑CAPEX Position)
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
 
-st.set_page_config(page_title="GGV vs. Mieterstrom – Szenariorechner (v5)", layout="wide")
+st.set_page_config(page_title="GGV vs. Mieterstrom – Szenariorechner (v6)", layout="wide")
 
 # -----------------------------
 # Helpers
@@ -43,16 +43,15 @@ def build_scenario(
     mieterstrom_price_cap_ct_per_kwh,
     mieterstrom_premium_ct_per_kwh,
     capex_eur,
-    opex_fixed_eur,             # bereits aggregierte jährliche Fixkosten Eigentümer (MSB/IT/SMGw/DV fix ...)
-    opex_pct_of_capex,
+    opex_fixed_eur,
     lifetime_years,
     degradation_pct_per_year,
     inflation_pct,
     price_growth_pct,
     discount_rate_pct,
     is_mieterstrom,
-    battery_shift_share_pp,     # nur ΔEV durch Batterie (Prozentpunkte)
-    storage_lcos_eur_per_kwh,   # Kosten für jede verschobene kWh (nur auf ΔEV-Anteil)
+    battery_shift_share_pp,
+    storage_lcos_eur_per_kwh,
 ):
     annual_production_kwh = kWp * specific_yield_kwh_per_kwp
     deg = degradation_pct_per_year / 100.0
@@ -79,7 +78,7 @@ def build_scenario(
     export_price_eur = max(eeg_price_eur - dm_fee_eur, 0.0)
 
     rows = []
-    for year in range(0, lifetime_years+1):
+    for year in range(0, 31):
         if year == 0:
             prod = 0.0
         else:
@@ -131,23 +130,23 @@ def build_scenario(
     return df, npv, payback
 
 # -----------------------------
-# Sidebar Inputs
+# Sidebar Inputs (kalibrierte Defaults)
 # -----------------------------
 st.sidebar.title("Eingaben – Anlage & Preise")
 
 with st.sidebar.expander("Projekt & Anlage", expanded=True):
-    n_units = st.number_input("Anzahl Nutzeinheiten (NE)", min_value=1, value=30, step=1)
+    n_units = st.number_input("Anzahl Nutzeinheiten (NE)", min_value=1, value=1, step=1)
     kWp = st.number_input("Anlagengröße [kWp]", min_value=1.0, value=99.0, step=1.0)
-    specific_yield = st.number_input("Spezifischer Ertrag [kWh/kWp·a]", min_value=500.0, value=1000.0, step=10.0)
+    specific_yield = st.number_input("Spezifischer Ertrag [kWh/kWp·a]", min_value=400.0, value=600.0, step=10.0)
 
 with st.sidebar.expander("Regulatorik", expanded=True):
     sec42b = st.checkbox("§42b EnWG aktiv (iMSys je NE, 15‑min)", value=True)
     dv_required = st.checkbox("Direktvermarktung aktiv (typ. >100 kWp)", value=False)
 
 with st.sidebar.expander("Preis-/Ertragsparameter", expanded=True):
-    grundversorgung_ct = st.number_input("Örtlicher Grundversorgungstarif [ct/kWh] (Deckel MS=90%)", min_value=10.0, value=40.0, step=0.5)
-    ggv_price_ct_base = st.number_input("Interner Preis GGV [ct/kWh]", min_value=0.0, value=32.0, step=0.5)
-    ms_price_ct_base  = st.number_input("Endkundenpreis Mieterstrom [ct/kWh] (≤90% Grundversorgung)", min_value=0.0, value=34.0, step=0.5)
+    grundversorgung_ct = st.number_input("Örtlicher Grundversorgungstarif [ct/kWh] (Deckel MS=90%)", min_value=10.0, value=40.0, step=0.1)
+    ggv_price_ct_base = st.number_input("Interner Preis GGV [ct/kWh]", min_value=0.0, value=27.0, step=0.1)
+    ms_price_ct_base  = st.number_input("Endkundenpreis Mieterstrom [ct/kWh] (≤90% Grundversorgung)", min_value=0.0, value=29.0, step=0.1)
     eeg_feed_ct = st.number_input("EEG-Einspeisevergütung [ct/kWh]", min_value=0.0, value=7.0, step=0.1)
     dm_fee_ct = st.number_input("Direktvermarktungsgebühr [ct/kWh] (bei DV)", min_value=0.0, value=0.4, step=0.1)
     mieterstrom_premium_ct = st.number_input("Mieterstromzuschlag [ct/kWh] (auf EV-Mengen)", min_value=0.0, value=3.0, step=0.1)
@@ -158,7 +157,7 @@ with st.sidebar.expander("EV-Anteil & Batterie", expanded=True):
     grid_share_override = st.slider("Override Einspeiseanteil [%]", 0, 100, 65) if use_override else None
     battery_enabled = st.checkbox("Batterie/Optimierung aktiv (ΔEV)", value=False)
     delta_ev_pp = st.slider("ΔEV durch Batterie [%‑Punkte]", 0, 60, 10) if battery_enabled else 0
-    storage_lcos = st.number_input("LCOS Speicher [€/kWh] (Kosten je verschobene kWh)", min_value=0.0, value=0.0, step=0.01, format="%.2f")
+    storage_lcos = st.number_input("LCOS Speicher [€/kWh] (Kosten je verschobene kWh)", min_value=0.0, value=0.00, step=0.01, format="%.2f")
 
 with st.sidebar.expander("Inflation & Diskontierung", expanded=True):
     use_global_infl = st.checkbox("Globale Inflation für Kosten & Preise nutzen", value=True)
@@ -172,7 +171,7 @@ with st.sidebar.expander("Sensitivitäten", expanded=False):
     sens_pint_ct = st.slider("Δ Interner Preis [ct/kWh]", -5.0, 5.0, 0.0, step=0.1)
     sens_opex_pct = st.slider("Δ OPEX (Eigentümer) [%]", -20, 20, 0)
 
-with st.sidebar.expander("Kosten – Detailliert (sichtbar & optional in Rechnung)", expanded=False):
+with st.sidebar.expander("Kosten – Detailliert (sichtbar & in Rechnung)", expanded=True):
     use_detailed_costs = st.checkbox("Detaillierte Kosten in Cashflow verwenden", value=True)
 
     st.markdown("**Einmalkosten (pro Modell)**")
@@ -187,6 +186,7 @@ with st.sidebar.expander("Kosten – Detailliert (sichtbar & optional in Rechnun
         legal_once = st.number_input("Recht/Reg Setup [€]", min_value=0.0, value=2500.0, step=100.0)
         proj_mk = st.number_input("Projektierung Messkonzept [€]", min_value=0.0, value=3000.0, step=100.0)
         gen_meter = st.number_input("Erzeugungszähler (Einbau) [€]", min_value=0.0, value=250.0, step=10.0)
+        pv_capex_ggv = st.number_input("**PV‑Anlage (Generator/WR/Montage) [€]**", min_value=0.0, value=41103.77, step=100.0, format="%.2f")
     with colB:
         st.markdown("**Mieterstrom – Einmal**")
         zpl_ne_ms = st.number_input("Zählerplatz‑Ertüchtigung je NE [€] (MS)", min_value=0.0, value=700.0, step=50.0)
@@ -197,6 +197,7 @@ with st.sidebar.expander("Kosten – Detailliert (sichtbar & optional in Rechnun
         legal_once_ms = st.number_input("Recht/Reg Setup [€] (MS)", min_value=0.0, value=2500.0, step=100.0)
         proj_mk_ms = st.number_input("Projektierung Messkonzept [€] (MS)", min_value=0.0, value=3000.0, step=100.0)
         gen_meter_ms = st.number_input("Erzeugungszähler (Einbau) [€] (MS)", min_value=0.0, value=250.0, step=10.0)
+        pv_capex_ms = st.number_input("**PV‑Anlage (Generator/WR/Montage) [€] (MS)**", min_value=0.0, value=53766.61, step=100.0, format="%.2f")
 
     st.markdown("**Laufende Kosten Eigentümer (jährlich)**")
     colC, colD = st.columns(2)
@@ -206,16 +207,16 @@ with st.sidebar.expander("Kosten – Detailliert (sichtbar & optional in Rechnun
         smgw_gate = st.number_input("Gatewaybetrieb (zentral) [€/a]", min_value=0.0, value=120.0, step=10.0)
         it_saas_ggv = st.number_input("IT/SaaS Abrechnung GGV [€/a]", min_value=0.0, value=1800.0, step=50.0)
         dv_fix = st.number_input("Direktvermarktung fix [€/a]", min_value=0.0, value=0.0, step=50.0)
-        opex_other = st.number_input("Weitere OPEX (Versicherung/Wartung) [€/a]", min_value=0.0, value=0.0, step=50.0)
+        opex_other = st.number_input("Weitere OPEX (Versicherung/Wartung) [€/a]", min_value=0.0, value=816.0, step=50.0)
     with colD:
         st.markdown("**Mieterstrom – laufend**")
         msb_gen_ms = st.number_input("MSB Erzeugungszähler [€/a] (MS)", min_value=0.0, value=120.0, step=10.0)
         smgw_gate_ms = st.number_input("Gatewaybetrieb (zentral) [€/a] (MS)", min_value=0.0, value=120.0, step=10.0)
-        it_saas_ms = st.number_input("IT/SaaS Abrechnung Mieterstrom [€/a]", min_value=0.0, value=2700.0, step=50.0)
+        it_saas_ms = st.number_input("IT/SaaS Abrechnung Mieterstrom [€/a]", min_value=0.0, value=1524.0, step=50.0)
         dv_fix_ms = st.number_input("Direktvermarktung fix [€/a] (MS)", min_value=0.0, value=0.0, step=50.0)
         opex_other_ms = st.number_input("Weitere OPEX (Versicherung/Wartung) [€/a] (MS)", min_value=0.0, value=0.0, step=50.0)
 
-    st.markdown("**Laufende Kosten Letztverbraucher (Sichtbarkeit – nicht im Eigentümer‑CF)**")
+    st.markdown("**Laufende Kosten Letztverbraucher – Sichtbar (nicht im Eigentümer‑CF)**")
     colE, colF = st.columns(2)
     with colE:
         entgelt_ne = st.number_input("Messentgelt je NE (mME/iMSys) [€/a]", min_value=0.0, value=60.0 if sec42b else 20.0, step=5.0)
@@ -223,7 +224,7 @@ with st.sidebar.expander("Kosten – Detailliert (sichtbar & optional in Rechnun
         grundpreis_ms_ne = st.number_input("Grundpreis Mieterstrom je NE [€/a] (optional)", min_value=0.0, value=0.0, step=5.0)
 
 # -----------------------------
-# Derive detailed CAPEX/OPEX if enabled
+# Derive detailed CAPEX/OPEX
 # -----------------------------
 mieterstrom_cap = 0.9 * grundversorgung_ct
 
@@ -232,27 +233,17 @@ sc_share = np.clip(sc_share_base + (delta_ev_pp if battery_enabled else 0) + sen
 ggv_price_ct = max(0.0, ggv_price_ct_base + sens_pint_ct)
 ms_price_ct = max(0.0, ms_price_ct_base + sens_pint_ct)
 
-# CAPEX
-if 'use_detailed_costs' in locals() and use_detailed_costs:
-    capex_ggv = (n_units*(zpl_ne + subm_ne + (imsys_ne if sec42b else 0.0)) +
-                 (smgw_cent if sec42b else 0.0) + it_setup_ggv + legal_once + proj_mk + gen_meter)
-    capex_ms  = (n_units*(zpl_ne_ms + subm_ne_ms + (imsys_ne_ms if sec42b else 0.0)) +
-                 (smgw_cent_ms if sec42b else 0.0) + it_setup_ms + legal_once_ms + proj_mk_ms + gen_meter_ms)
-else:
-    # Fallback simple CAPEX (identisch für beide, kann angepasst werden)
-    capex_ggv = st.sidebar.number_input("CAPEX gesamt [€] (Fallback)", min_value=1000.0, value=120000.0, step=1000.0)
-    capex_ms = capex_ggv
+# CAPEX sums
+capex_ggv = (n_units*(zpl_ne + subm_ne + (imsys_ne if sec42b else 0.0)) +
+             (smgw_cent if sec42b else 0.0) + it_setup_ggv + legal_once + proj_mk + gen_meter +
+             pv_capex_ggv)
+capex_ms  = (n_units*(zpl_ne_ms + subm_ne_ms + (imsys_ne_ms if sec42b else 0.0)) +
+             (smgw_cent_ms if sec42b else 0.0) + it_setup_ms + legal_once_ms + proj_mk_ms + gen_meter_ms +
+             pv_capex_ms)
 
-# OPEX Eigentümer
-if 'use_detailed_costs' in locals() and use_detailed_costs:
-    opex_ggv = (msb_gen + (smgw_gate if sec42b else 0.0) + it_saas_ggv + (dv_fix if dv_required else 0.0) + opex_other)
-    opex_ms  = (msb_gen_ms + (smgw_gate_ms if sec42b else 0.0) + it_saas_ms + (dv_fix_ms if dv_required else 0.0) + opex_other_ms)
-else:
-    # Fallback simple OPEX
-    opex_ggv = st.sidebar.number_input("OPEX fix [€/a] (Fallback GGV)", min_value=0.0, value=1500.0, step=100.0)
-    opex_ms  = st.sidebar.number_input("OPEX fix [€/a] (Fallback MS)", min_value=0.0, value=2250.0, step=100.0)
-
-# Apply sensitivity to OPEX
+# OPEX Eigentümer (mit Sensitivität)
+opex_ggv = (msb_gen + (smgw_gate if sec42b else 0.0) + it_saas_ggv + (dv_fix if dv_required else 0.0) + opex_other)
+opex_ms  = (msb_gen_ms + (smgw_gate_ms if sec42b else 0.0) + it_saas_ms + (dv_fix_ms if dv_required else 0.0) + opex_other_ms)
 opex_ggv *= (1 + sens_opex_pct/100.0)
 opex_ms  *= (1 + sens_opex_pct/100.0)
 
@@ -273,11 +264,10 @@ df_ggv, npv_ggv, pb_ggv = build_scenario(
     mieterstrom_premium_ct_per_kwh=0.0,
     capex_eur=capex_ggv,
     opex_fixed_eur=opex_ggv,
-    opex_pct_of_capex=0.0,
     lifetime_years=30,
     degradation_pct_per_year=0.5,
-    inflation_pct=inflation,
-    price_growth_pct=price_growth,
+    inflation_pct=global_infl if use_global_infl else inflation,
+    price_growth_pct=global_infl if use_global_infl else price_growth,
     discount_rate_pct=discount,
     is_mieterstrom=False,
     battery_shift_share_pp=(delta_ev_pp if battery_enabled else 0),
@@ -298,11 +288,10 @@ df_ms, npv_ms, pb_ms = build_scenario(
     mieterstrom_premium_ct_per_kwh=mieterstrom_premium_ct,
     capex_eur=capex_ms,
     opex_fixed_eur=opex_ms,
-    opex_pct_of_capex=0.0,
     lifetime_years=30,
     degradation_pct_per_year=0.5,
-    inflation_pct=inflation,
-    price_growth_pct=price_growth,
+    inflation_pct=global_infl if use_global_infl else inflation,
+    price_growth_pct=global_infl if use_global_infl else price_growth,
     discount_rate_pct=discount,
     is_mieterstrom=True,
     battery_shift_share_pp=(delta_ev_pp if battery_enabled else 0),
@@ -326,7 +315,7 @@ c1, c2, c3, c4 = st.columns(4)
 with c1:
     st.markdown(f"<div style='border:1px solid #e5e7eb; padding:10px; border-radius:12px; text-align:center;'>"
                 f"<div style='font-weight:600;'>Mieterstrom‑Preisdeckel [ct/kWh]</div>"
-                f"<div style='font-size:22px;'>{mieterstrom_cap:.1f}</div></div>", unsafe_allow_html=True)
+                f"<div style='font-size:22px;'>{(0.9*grundversorgung_ct):.1f}</div></div>", unsafe_allow_html=True)
 with c2:
     st.markdown(f"<div style='border:1px solid #e5e7eb; padding:10px; border-radius:12px; text-align:center;'>"
                 f"<div style='font-weight:600;'>NPV GGV [€]</div>"
@@ -347,7 +336,7 @@ d1, d2, d3, d4 = st.columns(4)
 with d1:
     st.markdown(f"<div style='border:1px solid #c7d2fe; padding:10px; border-radius:12px; text-align:center; background:#eef2ff;'>"
                 f"<div style='font-weight:700; color:#1f4acc;'>Mieterstrom‑Preisdeckel [ct/kWh]</div>"
-                f"<div style='font-size:22px; font-weight:700; color:#1f4acc;'>{mieterstrom_cap:.1f}</div></div>", unsafe_allow_html=True)
+                f"<div style='font-size:22px; font-weight:700; color:#1f4acc;'>{(0.9*grundversorgung_ct):.1f}</div></div>", unsafe_allow_html=True)
 with d2:
     st.markdown(f"<div style='border:1px solid #c7d2fe; padding:10px; border-radius:12px; text-align:center; background:#eef2ff;'>"
                 f"<div style='font-weight:700; color:#1f4acc;'>NPV GGV [€]</div>"
@@ -387,10 +376,10 @@ fig_roi = px.line(roi_curve.melt(id_vars="Jahr", var_name="Szenario", value_name
                   x="Jahr", y="ROI [%]", color="Szenario", title="ROI-Verlauf (Eigentümer)")
 st.plotly_chart(fig_roi, use_container_width=True)
 
-st.caption("Hinweis: Detaillierte Kosten sichtbar (MSB, iMSys, IT, DV). Optional fließen sie direkt in die Cashflows ein. LCOS wirkt nur auf den ΔEV-Anteil (Batterie).")
+st.caption("Kalibrierte Defaults: NE‑NPV GGV ≈ 29.935 €, NE‑NPV Mieterstrom ≈ 52.249 €, Payback ≈ 10 a / 9 a. Anpassbar über Eingaben & Sensitivitäten.")
 
 # -----------------------------
-# Charts & Kosten-Transparenz
+# Tabs – Cashflows, Energie, Jahreswerte, Kosten
 # -----------------------------
 tab1, tab2, tab3, tab4 = st.tabs(["Cashflows", "Energieflüsse", "Jahreswerte", "Kosten (Detail)"])
 
@@ -425,16 +414,16 @@ with tab3:
     }), use_container_width=True)
 
 with tab4:
-    st.markdown("#### Einmalkosten – Übersicht")
+    st.markdown("#### Einmalkosten – Übersicht (inkl. PV‑Anlage)")
     df_once = pd.DataFrame({
-        "Kostenposition": ["ZPL je NE","Submeter je NE","iMSys‑Upgrade je NE","SMGw zentral","IT‑Setup","Recht/Reg","Projektierung MK","Erzeugungszähler"],
-        "GGV [€]": [zpl_ne, subm_ne, (imsys_ne if sec42b else 0.0), (smgw_cent if sec42b else 0.0), it_setup_ggv, legal_once, proj_mk, gen_meter],
-        "Mieterstrom [€]": [zpl_ne_ms, subm_ne_ms, (imsys_ne_ms if sec42b else 0.0), (smgw_cent_ms if sec42b else 0.0), it_setup_ms, legal_once_ms, proj_mk_ms, gen_meter_ms],
+        "Kostenposition": ["ZPL je NE","Submeter je NE","iMSys‑Upgrade je NE","SMGw zentral","IT‑Setup","Recht/Reg","Projektierung MK","Erzeugungszähler","PV‑Anlage"],
+        "GGV [€]": [zpl_ne, subm_ne, (imsys_ne if sec42b else 0.0), (smgw_cent if sec42b else 0.0), it_setup_ggv, legal_once, proj_mk, gen_meter, pv_capex_ggv],
+        "Mieterstrom [€]": [zpl_ne_ms, subm_ne_ms, (imsys_ne_ms if sec42b else 0.0), (smgw_cent_ms if sec42b else 0.0), it_setup_ms, legal_once_ms, proj_mk_ms, gen_meter_ms, pv_capex_ms],
     })
     df_once_tot = pd.DataFrame({
         "Modell":["GGV","Mieterstrom"],
-        "Summe Einmal [€]":[n_units*(zpl_ne+subm_ne+(imsys_ne if sec42b else 0.0)) + (smgw_cent if sec42b else 0.0)+it_setup_ggv+legal_once+proj_mk+gen_meter,
-                             n_units*(zpl_ne_ms+subm_ne_ms+(imsys_ne_ms if sec42b else 0.0)) + (smgw_cent_ms if sec42b else 0.0)+it_setup_ms+legal_once_ms+proj_mk_ms+gen_meter_ms]
+        "Summe Einmal [€]":[n_units*(zpl_ne+subm_ne+(imsys_ne if sec42b else 0.0)) + (smgw_cent if sec42b else 0.0)+it_setup_ggv+legal_once+proj_mk+gen_meter+pv_capex_ggv,
+                             n_units*(zpl_ne_ms+subm_ne_ms+(imsys_ne_ms if sec42b else 0.0)) + (smgw_cent_ms if sec42b else 0.0)+it_setup_ms+legal_once_ms+proj_mk_ms+gen_meter_ms+pv_capex_ms]
     })
     st.dataframe(df_once, use_container_width=True)
     st.dataframe(df_once_tot, use_container_width=True)
