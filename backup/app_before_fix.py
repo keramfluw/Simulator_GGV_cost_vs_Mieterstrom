@@ -517,20 +517,20 @@ with tab1:
     df_plot = df_all[df_all["Jahr"]>0].copy()
     fig_cf = px.line(df_plot, x="Jahr", y="Netto Cashflow", color="Szenario", title="Jährlicher Netto-Cashflow (Projekt)")
     fig_cf.update_traces(hovertemplate="Jahr=%{x}<br>Netto‑Cashflow=%{y:,.2f} €<extra></extra>")
-    st.plotly_chart(fig_cf, width='stretch')
+    st.plotly_chart(fig_cf, use_container_width=True)
 
     df_cum = df_plot.copy()
     df_cum["Kumuliert [€]"] = df_cum.groupby("Szenario")["Netto Cashflow"].cumsum()
     fig_cum = px.line(df_cum, x="Jahr", y="Kumuliert [€]", color="Szenario", title="Kumulierter Cashflow (Projekt)")
     fig_cum.update_traces(hovertemplate="Jahr=%{x}<br>Kumuliert=%{y:,.2f} €<extra></extra>")
-    st.plotly_chart(fig_cum, width='stretch')
+    st.plotly_chart(fig_cum, use_container_width=True)
 
 with tab2:
     df_energy = df_all[df_all["Jahr"]>0].copy()
     df_energy = df_energy.melt(id_vars=["Szenario","Jahr"], value_vars=["EV [kWh]","Einspeisung [kWh]"], var_name="Art", value_name="kWh")
     fig_e = px.area(df_energy, x="Jahr", y="kWh", color="Art", facet_col="Szenario", facet_col_wrap=2, title="Energieflüsse EV vs. Einspeisung")
     fig_e.update_traces(hovertemplate="Jahr=%{x}<br>%{fullData.name}=%{y:,.2f} kWh<extra></extra>")
-    st.plotly_chart(fig_e, width='stretch')
+    st.plotly_chart(fig_e, use_container_width=True)
 
 with tab3:
     st.dataframe(df_all.style.format({
@@ -545,7 +545,7 @@ with tab3:
         "CAPEX [€]":"{:,.2f}",
         "Umsatz gesamt [€]":"{:,.2f}",
         "Netto Cashflow":"{:,.2f}",
-    }), width='stretch')
+    }), use_container_width=True)
 
 with tab4:
     st.markdown("#### Einmalkosten – Übersicht (inkl. PV‑Anlage)")
@@ -559,8 +559,8 @@ with tab4:
         "Summe Einmal [€]":[n_units*(zpl_ne+subm_ne+(imsys_ne if sec42b else 0.0)) + (smgw_cent if sec42b else 0.0)+it_setup_ggv+legal_once+proj_mk+gen_meter+pv_capex_ggv,
                              n_units*(zpl_ne_ms+subm_ne_ms+(imsys_ne_ms if sec42b else 0.0)) + (smgw_cent_ms if sec42b else 0.0)+it_setup_ms+legal_once_ms+proj_mk_ms+gen_meter_ms+pv_capex_ms]
     })
-    st.dataframe(df_once.style.format({"GGV [€]":"{:,.2f}","Mieterstrom [€]":"{:,.2f}"}), width='stretch')
-    st.dataframe(df_once_tot.style.format({"Summe Einmal [€]":"{:,.2f}"}), width='stretch')
+    st.dataframe(df_once.style.format({"GGV [€]":"{:,.2f}","Mieterstrom [€]":"{:,.2f}"}), use_container_width=True)
+    st.dataframe(df_once_tot.style.format({"Summe Einmal [€]":"{:,.2f}"}), use_container_width=True)
 
 with tab5:
     st.markdown("### Eigenkapital-Cashflows & Schuldendienst")
@@ -568,10 +568,10 @@ with tab5:
     ms_merge  = ek_ms["eq_df"].merge(ek_ms["schedule"],  how="left", on="Jahr").fillna(0.0)
     st.write("**GGV – EK‑CF und Schuldendienst**")
     st.dataframe(ggv_merge.style.format({"EK-CF [€]":"{:,.2f}","Zins":"{:,.2f}","Tilgung":"{:,.2f}","Schuldendienst":"{:,.2f}","Restschuld":"{:,.2f}"}),
-                 width='stretch')
+                 use_container_width=True)
     st.write("**Mieterstrom – EK‑CF und Schuldendienst**")
     st.dataframe(ms_merge.style.format({"EK-CF [€]":"{:,.2f}","Zins":"{:,.2f}","Tilgung":"{:,.2f}","Schuldendienst":"{:,.2f}","Restschuld":"{:,.2f}"}),
-                 width='stretch')
+                 use_container_width=True)
 
 # -----------------------------
 # Export
