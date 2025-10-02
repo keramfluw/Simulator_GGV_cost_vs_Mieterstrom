@@ -1,10 +1,10 @@
-# app.py (v8 – Finanzierung & Eigenkapitalrendite)
+# app.py (v9 – Tooltips & Hover-Formatting)
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
 
-st.set_page_config(page_title="GGV vs. Mieterstrom – Szenariorechner (v8)", layout="wide")
+st.set_page_config(page_title="GGV vs. Mieterstrom – Szenariorechner (v9)", layout="wide")
 
 # -----------------------------
 # Helpers
@@ -23,7 +23,6 @@ def cashflow_summary(df, discount_rate):
     return npv, payback_year
 
 def irr_from_series(cf):
-    # Bisection IRR between -99% and +200%
     lo, hi = -0.99, 2.0
     def npv_r(r):
         return np.sum(cf / ((1+r)**np.arange(len(cf))))
@@ -51,21 +50,16 @@ def eur2(value, german=True):
     return s
 
 def debt_schedule_annuity(principal, rate_pct, tenor_years, grace_years, horizon_years):
-    """Return yearly schedule DataFrame with columns: Jahr, Zins, Tilgung, Schuldendienst, Restschuld"""
     r = rate_pct/100.0
     rows = []
     outstanding = principal
-    # Years start at 1
-    # Grace: interest-only
     for year in range(1, grace_years+1):
         if year > horizon_years: break
         interest = outstanding * r
         principal_pay = 0.0
         debt_service = interest + principal_pay
         rows.append({"Jahr": year, "Zins": interest, "Tilgung": principal_pay, "Schuldendienst": debt_service, "Restschuld": outstanding})
-    # Amortization years
     n_amort = max(tenor_years - grace_years, 0)
-    annuity = 0.0
     if n_amort > 0:
         if r > 0:
             annuity = outstanding * (r*(1+r)**n_amort) / ((1+r)**n_amort - 1)
@@ -76,35 +70,27 @@ def debt_schedule_annuity(principal, rate_pct, tenor_years, grace_years, horizon
             if year > horizon_years: break
             interest = outstanding * r
             principal_pay = annuity - interest
-            # numerical guard
             if principal_pay < 0:
                 principal_pay = 0.0
             outstanding = max(outstanding - principal_pay, 0.0)
             debt_service = interest + principal_pay
             rows.append({"Jahr": year, "Zins": interest, "Tilgung": principal_pay, "Schuldendienst": debt_service, "Restschuld": outstanding})
-    # Fill remaining horizon with zeros
     for year in range(len(rows)+1, horizon_years+1):
         rows.append({"Jahr": year, "Zins": 0.0, "Tilgung": 0.0, "Schuldendienst": 0.0, "Restschuld": outstanding})
     return pd.DataFrame(rows[:horizon_years])
 
 def equity_metrics(project_df, capex, eq_ratio_pct, rate_pct, tenor_years, grace_years, horizon_years, eq_discount_pct):
-    """Compute equity cash flows & metrics"""
     debt = capex * (1 - eq_ratio_pct/100.0)
     equity = capex * (eq_ratio_pct/100.0)
     sched = debt_schedule_annuity(debt, rate_pct, tenor_years, grace_years, horizon_years)
-    # Project cash flows by year
     cf = project_df.sort_values("Jahr")[["Jahr","Netto Cashflow"]].copy()
-    # Equity CF: E0 = -equity; Et = ProjectCF_t - DebtService_t; also add debt draw at t0 to reconcile, i.e. E0 = P0 + debt
     eq_cf = np.zeros(horizon_years+1, dtype=float)
-    # Year 0
     p0 = float(cf.loc[cf["Jahr"]==0, "Netto Cashflow"].sum())
     eq_cf[0] = p0 + debt  # equals -equity
-    # Years 1..horizon
     for year in range(1, horizon_years+1):
         p_t = float(cf.loc[cf["Jahr"]==year, "Netto Cashflow"].sum())
         ds_t = float(sched.loc[sched["Jahr"]==year, "Schuldendienst"].sum()) if year <= len(sched) else 0.0
         eq_cf[year] = p_t - ds_t
-    # Metrics
     eq_npv = 0.0
     r_e = eq_discount_pct/100.0
     for t in range(0, horizon_years+1):
@@ -116,7 +102,6 @@ def equity_metrics(project_df, capex, eq_ratio_pct, rate_pct, tenor_years, grace
         cum += eq_cf[t]
         if payback is None and cum >= 0 and t>0:
             payback = t
-    # DSCR
     dscr_list = []
     for year in range(1, horizon_years+1):
         cfads = float(cf.loc[cf["Jahr"]==year, "Netto Cashflow"].sum())
@@ -130,55 +115,21 @@ def equity_metrics(project_df, capex, eq_ratio_pct, rate_pct, tenor_years, grace
         idxmin = dscr_df["DSCR"].idxmin()
         min_dscr = float(dscr_df.loc[idxmin, "DSCR"])
         min_dscr_year = int(dscr_df.loc[idxmin, "Jahr"])
-    # Assemble DataFrame for display
-    eq_df = pd.DataFrame({
-        "Jahr": list(range(0, horizon_years+1)),
-        "EK-CF [€]": eq_cf
-    })
-    return {
-        "eq_df": eq_df,
-        "schedule": sched,
-        "eq_npv": eq_npv,
-        "eq_irr": irr,
-        "eq_payback": payback,
-        "min_dscr": min_dscr,
-        "min_dscr_year": min_dscr_year,
-    }
+    eq_df = pd.DataFrame({"Jahr": list(range(0, horizon_years+1)), "EK-CF [€]": eq_cf})
+    return {"eq_df": eq_df, "schedule": sched, "eq_npv": eq_npv, "eq_irr": irr, "eq_payback": payback, "min_dscr": min_dscr, "min_dscr_year": min_dscr_year}
 
 def build_scenario(
-    label,
-    kWp,
-    specific_yield_kwh_per_kwp,
-    self_consumption_share,     # % nach Sensitivität & Batterie
-    grid_share_override,        # % or None
-    grundversorgung_ct_per_kwh,
-    eeg_feed_in_ct_per_kwh,
-    dm_fee_ct_per_kwh,
-    internal_price_ct_per_kwh,
-    mieterstrom_price_cap_factor,   # z.B. 0.9
-    mieterstrom_premium_ct_per_kwh,
-    capex_eur,
-    opex_fixed_eur,
-    lifetime_years,
-    degradation_pct_per_year,
-    inflation_pct,
-    price_growth_pct,
-    discount_rate_pct,
-    is_mieterstrom,
-    battery_shift_share_pp,
-    storage_lcos_eur_per_kwh,
-    index_eeg_price=False,
-    index_ms_premium=False,
-    ms_full_supply=False,
-    ne_count=1,
-    cons_per_ne_kwh=2000,
-    procurement_ct_per_kwh=28.0,
+    label, kWp, specific_yield_kwh_per_kwp, self_consumption_share, grid_share_override,
+    grundversorgung_ct_per_kwh, eeg_feed_in_ct_per_kwh, dm_fee_ct_per_kwh, internal_price_ct_per_kwh,
+    mieterstrom_price_cap_factor, mieterstrom_premium_ct_per_kwh, capex_eur, opex_fixed_eur,
+    lifetime_years, degradation_pct_per_year, inflation_pct, price_growth_pct, discount_rate_pct,
+    is_mieterstrom, battery_shift_share_pp, storage_lcos_eur_per_kwh, index_eeg_price=False,
+    index_ms_premium=False, ms_full_supply=False, ne_count=1, cons_per_ne_kwh=2000, procurement_ct_per_kwh=28.0,
 ):
     annual_production_kwh = kWp * specific_yield_kwh_per_kwp
     deg = degradation_pct_per_year / 100.0
     infl = inflation_pct / 100.0
     price_growth = price_growth_pct / 100.0
-    disc = discount_rate_pct / 100.0
 
     sc_share = np.clip(self_consumption_share/100.0, 0, 1)
     if grid_share_override is not None:
@@ -207,7 +158,6 @@ def build_scenario(
         sc_kwh = prod * sc_share
         grid_kwh = prod * grid_share
 
-        # Preise/Indizes
         gs_y = grundversorgung_eur * ((1 + price_growth) ** max(0, year-1))
         cap_y = mieterstrom_cap_factor * gs_y
 
@@ -220,7 +170,6 @@ def build_scenario(
         export_price_y = export_price_base * ((1 + price_growth) ** max(0, year-1)) if index_eeg_price else export_price_base
         premium_y = mieterstrom_premium_eur * ((1 + infl) ** max(0, year-1)) if index_ms_premium else mieterstrom_premium_eur
 
-        # Erlöse PV
         internal_rev = sc_kwh * internal_price_y
         export_rev = grid_kwh * export_price_y
         premium_rev = (sc_kwh * premium_y) if is_mieterstrom else 0.0
@@ -231,15 +180,13 @@ def build_scenario(
             total_cons = ne_count * cons_per_ne_kwh
             comp_kwh = max(total_cons - sc_kwh, 0.0)
             procurement_y = procurement_eur * ((1 + price_growth) ** max(0, year-1))
-            nonpv_rev = comp_kwh * internal_price_y  # Verkauf
-            nonpv_cost = comp_kwh * procurement_y    # Beschaffung
+            nonpv_rev = comp_kwh * internal_price_y
+            nonpv_cost = comp_kwh * procurement_y
 
         total_rev = internal_rev + export_rev + premium_rev + nonpv_rev
 
-        # OPEX fix (ab Jahr 1, inflationsindexiert)
         opex_y = 0.0 if year == 0 else opex_fixed_eur * ((1 + infl) ** max(0, year-1))
 
-        # Speicher-Betriebskosten via LCOS auf den ΔEV-Anteil (nur wenn year>0)
         if year > 0 and battery_shift_share_pp > 0 and storage_lcos_eur_per_kwh > 0:
             shifted_kwh = prod * (battery_shift_share_pp/100.0)
             opex_y += shifted_kwh * storage_lcos_eur_per_kwh
@@ -265,7 +212,7 @@ def build_scenario(
         })
 
     df = pd.DataFrame(rows)
-    npv, payback = cashflow_summary(df, discount_rate_pct/100.0)
+    npv, payback = cashflow_summary(df, 0.06)  # discount used only for tooltip; metric NPV shown elsewhere
     irr = irr_from_df(df)
     return df, npv, payback, irr
 
@@ -313,7 +260,6 @@ with st.sidebar.expander("Sensitivitäten", expanded=False):
 
 with st.sidebar.expander("Kosten – Detailliert (sichtbar & in Rechnung)", expanded=True):
     st.caption("Wird automatisch zu CAPEX/OPEX aggregiert.")
-    # Einmal
     colA, colB = st.columns(2)
     with colA:
         st.markdown("**GGV – Einmal**")
@@ -338,7 +284,6 @@ with st.sidebar.expander("Kosten – Detailliert (sichtbar & in Rechnung)", expa
         gen_meter_ms = st.number_input("Erzeugungszähler (Einbau) [€] (MS)", min_value=0.0, value=250.0, step=10.0)
         pv_capex_ms = st.number_input("PV‑Anlage [€] (MS)", min_value=0.0, value=53766.61, step=100.0, format="%.2f")
 
-    # Laufend Eigentümer
     colC, colD = st.columns(2)
     with colC:
         st.markdown("**GGV – laufend**")
@@ -370,26 +315,19 @@ with st.sidebar.expander("Finanzierung (für EK-Rendite)", expanded=True):
     eq_discount = st.number_input("EK-Diskontsatz (NPV) [%/a]", min_value=0.0, value=8.0, step=0.1)
 
 # -----------------------------
-# Derive CAPEX/OPEX totals
+# CAPEX/OPEX totals
 # -----------------------------
-mieterstrom_cap_factor = 0.9  # 90% Deckel
-# Sensitivities applied
+mieterstrom_cap_factor = 0.9
 sc_share = np.clip(sc_share_base + (delta_ev_pp if battery_enabled else 0) + sens_ev, 0, 100)
 ggv_price_ct = max(0.0, ggv_price_ct_base + sens_pint_ct)
 ms_price_ct = max(0.0, ms_price_ct_base + sens_pint_ct)
-# CAPEX sums
-capex_ggv = (n_units*(zpl_ne + subm_ne + (imsys_ne if sec42b else 0.0)) +
-             (smgw_cent if sec42b else 0.0) + it_setup_ggv + legal_once + proj_mk + gen_meter +
-             pv_capex_ggv)
-capex_ms  = (n_units*(zpl_ne_ms + subm_ne_ms + (imsys_ne_ms if sec42b else 0.0)) +
-             (smgw_cent_ms if sec42b else 0.0) + it_setup_ms + legal_once_ms + proj_mk_ms + gen_meter_ms +
-             pv_capex_ms)
-# OPEX Eigentümer (mit Sensitivität)
+capex_ggv = (n_units*(zpl_ne + subm_ne + (imsys_ne if sec42b else 0.0)) + (smgw_cent if sec42b else 0.0) + it_setup_ggv + legal_once + proj_mk + gen_meter + pv_capex_ggv)
+capex_ms  = (n_units*(zpl_ne_ms + subm_ne_ms + (imsys_ne_ms if sec42b else 0.0)) + (smgw_cent_ms if sec42b else 0.0) + it_setup_ms + legal_once_ms + proj_mk_ms + gen_meter_ms + pv_capex_ms)
 opex_ggv = (msb_gen + (smgw_gate if sec42b else 0.0) + it_saas_ggv + (dv_fix if dv_required else 0.0) + opex_other) * (1 + sens_opex_pct/100.0)
 opex_ms  = (msb_gen_ms + (smgw_gate_ms if sec42b else 0.0) + it_saas_ms + (dv_fix_ms if dv_required else 0.0) + opex_other_ms) * (1 + sens_opex_pct/100.0)
 
 # -----------------------------
-# Build scenarios (Projekt-CF)
+# Build scenarios
 # -----------------------------
 df_ggv, npv_ggv, pb_ggv, irr_ggv = build_scenario(
     label="GGV",
@@ -413,7 +351,7 @@ df_ggv, npv_ggv, pb_ggv, irr_ggv = build_scenario(
     is_mieterstrom=False,
     battery_shift_share_pp=(delta_ev_pp if battery_enabled else 0),
     storage_lcos_eur_per_kwh=storage_lcos,
-    index_eeg_price=False,      # EEG fix für GGV-Export
+    index_eeg_price=False,
     index_ms_premium=False,
     ms_full_supply=False,
     ne_count=n_units,
@@ -452,7 +390,7 @@ df_ms, npv_ms, pb_ms, irr_ms = build_scenario(
 df_all = pd.concat([df_ggv, df_ms], ignore_index=True)
 
 # -----------------------------
-# KPIs – NE/LG
+# KPIs – NE/LG with title-tooltips
 # -----------------------------
 ne_npv_ggv = npv_ggv / n_units
 ne_npv_ms = npv_ms / n_units
@@ -465,19 +403,19 @@ st.markdown("**NE – Nutzeinheit (pro Einheit)**")
 c1, c2, c3, c4 = st.columns(4)
 cap_now = 0.9*grundversorgung_ct
 with c1:
-    st.markdown(f"<div style='border:1px solid #e5e7eb; padding:10px; border-radius:12px; text-align:center;'>"
+    st.markdown(f"<div title='Mieterstrom‑Cap: max. 90% des örtlichen Grundversorgungstarifs.' style='border:1px solid #e5e7eb; padding:10px; border-radius:12px; text-align:center;'>"
                 f"<div style='font-weight:600;'>Mieterstrom‑Preisdeckel [ct/kWh]</div>"
                 f"<div style='font-size:22px;'>{cap_now:.1f}</div></div>", unsafe_allow_html=True)
 with c2:
-    st.markdown(f"<div style='border:1px solid #e5e7eb; padding:10px; border-radius:12px; text-align:center;'>"
+    st.markdown(f"<div title='NPV = Barwert aller Netto‑Cashflows zum Diskontsatz.' style='border:1px solid #e5e7eb; padding:10px; border-radius:12px; text-align:center;'>"
                 f"<div style='font-weight:600;'>NPV GGV [€]</div>"
                 f"<div style='font-size:22px;'>{eur2(ne_npv_ggv)}</div></div>", unsafe_allow_html=True)
 with c3:
-    st.markdown(f"<div style='border:1px solid #e5e7eb; padding:10px; border-radius:12px; text-align:center;'>"
+    st.markdown(f"<div title='NPV = Barwert aller Netto‑Cashflows zum Diskontsatz.' style='border:1px solid #e5e7eb; padding:10px; border-radius:12px; text-align:center;'>"
                 f"<div style='font-weight:600;'>NPV Mieterstrom [€]</div>"
                 f"<div style='font-size:22px;'>{eur2(ne_npv_ms)}</div></div>", unsafe_allow_html=True)
 with c4:
-    st.markdown(f"<div style='border:1px solid #e5e7eb; padding:10px; border-radius:12px; text-align:center;'>"
+    st.markdown(f"<div title='Payback = erstes Jahr, in dem der kumulierte Netto‑Cashflow ≥ 0 ist (ungehebelt).' style='border:1px solid #e5e7eb; padding:10px; border-radius:12px; text-align:center;'>"
                 f"<div style='font-weight:600;'>Payback: GGV / MS</div>"
                 f"<div style='font-size:22px;'>{pb1} / {pb2}</div></div>", unsafe_allow_html=True)
 
@@ -486,24 +424,24 @@ st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
 st.markdown("**LG – Liegenschaft (kumuliert)**")
 d1, d2, d3, d4 = st.columns(4)
 with d1:
-    st.markdown(f"<div style='border:1px solid #c7d2fe; padding:10px; border-radius:12px; text-align:center; background:#eef2ff;'>"
+    st.markdown(f"<div title='Mieterstrom‑Cap: 90% Grundversorgung; jährlich zu prüfen.' style='border:1px solid #c7d2fe; padding:10px; border-radius:12px; text-align:center; background:#eef2ff;'>"
                 f"<div style='font-weight:700; color:#1f4acc;'>Mieterstrom‑Preisdeckel [ct/kWh]</div>"
                 f"<div style='font-size:22px; font-weight:700; color:#1f4acc;'>{cap_now:.1f}</div></div>", unsafe_allow_html=True)
 with d2:
-    st.markdown(f"<div style='border:1px solid #c7d2fe; padding:10px; border-radius:12px; text-align:center; background:#eef2ff;'>"
+    st.markdown(f"<div title='NPV = Barwert aller Netto‑Cashflows der Liegenschaft.' style='border:1px solid #c7d2fe; padding:10px; border-radius:12px; text-align:center; background:#eef2ff;'>"
                 f"<div style='font-weight:700; color:#1f4acc;'>NPV GGV [€]</div>"
                 f"<div style='font-size:22px; font-weight:700; color:#1f4acc;'>{eur2(npv_ggv)}</div></div>", unsafe_allow_html=True)
 with d3:
-    st.markdown(f"<div style='border:1px solid #c7d2fe; padding:10px; border-radius:12px; text-align:center; background:#eef2ff;'>"
+    st.markdown(f"<div title='NPV = Barwert aller Netto‑Cashflows der Liegenschaft.' style='border:1px solid #c7d2fe; padding:10px; border-radius:12px; text-align:center; background:#eef2ff;'>"
                 f"<div style='font-weight:700; color:#1f4acc;'>NPV Mieterstrom [€]</div>"
                 f"<div style='font-size:22px; font-weight:700; color:#1f4acc;'>{eur2(npv_ms)}</div></div>", unsafe_allow_html=True)
 with d4:
-    st.markdown(f"<div style='border:1px solid #c7d2fe; padding:10px; border-radius:12px; text-align:center; background:#eef2ff;'>"
+    st.markdown(f"<div title='Payback = erstes Jahr mit kumuliertem Netto‑CF ≥ 0 (ungehebelt).' style='border:1px solid #c7d2fe; padding:10px; border-radius:12px; text-align:center; background:#eef2ff;'>"
                 f"<div style='font-weight:700; color:#1f4acc;'>Payback: GGV / MS</div>"
                 f"<div style='font-size:22px; font-weight:700; color:#1f4acc;'>{pb1} / {pb2}</div></div>", unsafe_allow_html=True)
 
 # -----------------------------
-# ROI & IRR (Projekt) + EK-Rendite
+# ROI & IRR (Projekt) + EK-Rendite (with help tooltips)
 # -----------------------------
 st.markdown("### Wirtschaftlichkeit / Rendite – Projekt vs. Eigenkapital")
 years = st.slider("Analysehorizont [Jahre]", min_value=2, max_value=30, value=20, step=1)
@@ -514,53 +452,68 @@ def roi_over_horizon(df, years):
         return None
     return cum_net / capex
 
-# Projekt-ROI/IRR
 roi_ggv = roi_over_horizon(df_ggv, years)
 roi_ms = roi_over_horizon(df_ms, years)
 irr_prj_ggv = irr_ggv
 irr_prj_ms = irr_ms
 
-# EK-Metriken
-ek_ggv = equity_metrics(df_ggv, capex_ggv, eq_ratio, fk_rate, fk_tenor, fk_grace, years, eq_discount)
-ek_ms  = equity_metrics(df_ms,  capex_ms,  eq_ratio, fk_rate, fk_tenor, fk_grace, years, eq_discount)
+def eq_metrics_for(df, capex):
+    return equity_metrics(df, capex, eq_ratio, fk_rate, fk_tenor, fk_grace, years, eq_discount)
+
+ek_ggv = eq_metrics_for(df_ggv, capex_ggv)
+ek_ms  = eq_metrics_for(df_ms,  capex_ms)
+
+help_roi = "Projekt‑ROI (Cash‑on‑Capex) = Summe der Netto‑Cashflows bis Jahr T geteilt durch CAPEX. Keine Jahresrendite."
+help_prj_irr = "Projekt‑IRR = interne Verzinsung des ungehebelten Projekt‑Cashflows."
+help_ek_irr = "EK‑IRR = interne Verzinsung der Eigenkapital‑Cashflows (nach Schuldendienst)."
+help_ek_npv = "EK‑NPV = Barwert der Eigenkapital‑Cashflows zum EK‑Diskontsatz."
+help_ek_payback = "EK‑Payback = erstes Jahr, in dem der kumulierte Eigenkapital‑Cashflow ≥ 0 ist."
+help_dscr = "DSCR = CFADS / Schuldendienst; Ziel i. d. R. ≥ 1,20."
 
 colA, colB, colC, colD = st.columns(4)
-colA.metric(f"Projekt-ROI GGV (bis Jahr {years})", f"{(roi_ggv*100):.1f}%")
-colB.metric(f"Projekt-ROI MS (bis Jahr {years})", f"{(roi_ms*100):.1f}%")
-colC.metric("Projekt-IRR GGV", f"{(irr_prj_ggv*100):.2f}%" if irr_prj_ggv is not None else "n/a")
-colD.metric("Projekt-IRR MS", f"{(irr_prj_ms*100):.2f}%" if irr_prj_ms is not None else "n/a")
+colA.metric(f"Projekt-ROI GGV (bis Jahr {years})", f"{(roi_ggv*100):.1f}%", help=help_roi)
+colB.metric(f"Projekt-ROI MS (bis Jahr {years})", f"{(roi_ms*100):.1f}%", help=help_roi)
+colC.metric("Projekt-IRR GGV", f"{(irr_prj_ggv*100):.2f}%" if irr_prj_ggv is not None else "n/a", help=help_prj_irr)
+colD.metric("Projekt-IRR MS", f"{(irr_prj_ms*100):.2f}%" if irr_prj_ms is not None else "n/a", help=help_prj_irr)
 
 colE, colF, colG, colH = st.columns(4)
-colE.metric("**EK‑IRR GGV**", f"{(ek_ggv['eq_irr']*100):.2f}%" if ek_ggv['eq_irr'] is not None else "n/a")
-colF.metric("**EK‑IRR MS**", f"{(ek_ms['eq_irr']*100):.2f}%" if ek_ms['eq_irr'] is not None else "n/a")
-colG.metric("**EK‑NPV GGV**", f"{eur2(ek_ggv['eq_npv'])}")
-colH.metric("**EK‑NPV MS**", f"{eur2(ek_ms['eq_npv'])}")
+colE.metric("EK‑IRR GGV", f"{(ek_ggv['eq_irr']*100):.2f}%" if ek_ggv['eq_irr'] is not None else "n/a", help=help_ek_irr)
+colF.metric("EK‑IRR MS", f"{(ek_ms['eq_irr']*100):.2f}%" if ek_ms['eq_irr'] is not None else "n/a", help=help_ek_irr)
+colG.metric("EK‑NPV GGV", f"{eur2(ek_ggv['eq_npv'])}", help=help_ek_npv)
+colH.metric("EK‑NPV MS", f"{eur2(ek_ms['eq_npv'])}", help=help_ek_npv)
 
 colI, colJ = st.columns(2)
-colI.metric("**EK‑Payback GGV**", f"{ek_ggv['eq_payback']} a" if ek_ggv['eq_payback'] is not None else "n/a")
-colJ.metric("**EK‑Payback MS**", f"{ek_ms['eq_payback']} a" if ek_ms['eq_payback'] is not None else "n/a")
+colI.metric("EK‑Payback GGV", f"{ek_ggv['eq_payback']} a" if ek_ggv['eq_payback'] is not None else "n/a", help=help_ek_payback)
+colJ.metric("EK‑Payback MS", f"{ek_ms['eq_payback']} a" if ek_ms['eq_payback'] is not None else "n/a", help=help_ek_payback)
 
 colK, colL = st.columns(2)
-colK.metric("Min. DSCR GGV", f"{ek_ggv['min_dscr']:.2f}" if ek_ggv['min_dscr'] is not None else "n/a", help=f"Jahr {ek_ggv['min_dscr_year']}" if ek_ggv['min_dscr_year'] else None)
-colL.metric("Min. DSCR MS", f"{ek_ms['min_dscr']:.2f}" if ek_ms['min_dscr'] is not None else "n/a", help=f"Jahr {ek_ms['min_dscr_year']}" if ek_ms['min_dscr_year'] else None)
+colK.metric("Min. DSCR GGV", f"{ek_ggv['min_dscr']:.2f}" if ek_ggv['min_dscr'] is not None else "n/a",
+            help=f"{help_dscr} (kritisch in Jahr {ek_ggv['min_dscr_year']})" if ek_ggv['min_dscr_year'] else help_dscr)
+colL.metric("Min. DSCR MS", f"{ek_ms['min_dscr']:.2f}" if ek_ms['min_dscr'] is not None else "n/a",
+            help=f"{help_dscr} (kritisch in Jahr {ek_ms['min_dscr_year']})" if ek_ms['min_dscr_year'] else help_dscr)
 
-# Charts
+# -----------------------------
+# Charts with formatted hovertooltips
+# -----------------------------
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["Cashflows (Projekt)", "Energieflüsse", "Jahreswerte", "Kosten (Detail)", "Finanzierung/EK"])
 
 with tab1:
     df_plot = df_all[df_all["Jahr"]>0].copy()
     fig_cf = px.line(df_plot, x="Jahr", y="Netto Cashflow", color="Szenario", title="Jährlicher Netto-Cashflow (Projekt)")
+    fig_cf.update_traces(hovertemplate="Jahr=%{x}<br>Netto‑Cashflow=%{y:,.2f} €<extra></extra>")
     st.plotly_chart(fig_cf, use_container_width=True)
 
     df_cum = df_plot.copy()
     df_cum["Kumuliert [€]"] = df_cum.groupby("Szenario")["Netto Cashflow"].cumsum()
     fig_cum = px.line(df_cum, x="Jahr", y="Kumuliert [€]", color="Szenario", title="Kumulierter Cashflow (Projekt)")
+    fig_cum.update_traces(hovertemplate="Jahr=%{x}<br>Kumuliert=%{y:,.2f} €<extra></extra>")
     st.plotly_chart(fig_cum, use_container_width=True)
 
 with tab2:
     df_energy = df_all[df_all["Jahr"]>0].copy()
     df_energy = df_energy.melt(id_vars=["Szenario","Jahr"], value_vars=["EV [kWh]","Einspeisung [kWh]"], var_name="Art", value_name="kWh")
     fig_e = px.area(df_energy, x="Jahr", y="kWh", color="Art", facet_col="Szenario", facet_col_wrap=2, title="Energieflüsse EV vs. Einspeisung")
+    fig_e.update_traces(hovertemplate="Jahr=%{x}<br>%{fullData.name}=%{y:,.2f} kWh<extra></extra>")
     st.plotly_chart(fig_e, use_container_width=True)
 
 with tab3:
@@ -568,14 +521,14 @@ with tab3:
         "Produktion [kWh]":"{:,.0f}",
         "EV [kWh]":"{:,.0f}",
         "Einspeisung [kWh]":"{:,.0f}",
-        "Erlös intern [€]":"{:,.0f}",
-        "Einspeiseerlös [€]":"{:,.0f}",
-        "Mieterstromzuschlag [€]":"{:,.0f}",
-        "Beschaffung nicht‑PV [€]":"{:,.0f}",
-        "OPEX [€]":"{:,.0f}",
-        "CAPEX [€]":"{:,.0f}",
-        "Umsatz gesamt [€]":"{:,.0f}",
-        "Netto Cashflow":"{:,.0f}",
+        "Erlös intern [€]":"{:,.2f}",
+        "Einspeiseerlös [€]":"{:,.2f}",
+        "Mieterstromzuschlag [€]":"{:,.2f}",
+        "Beschaffung nicht‑PV [€]":"{:,.2f}",
+        "OPEX [€]":"{:,.2f}",
+        "CAPEX [€]":"{:,.2f}",
+        "Umsatz gesamt [€]":"{:,.2f}",
+        "Netto Cashflow":"{:,.2f}",
     }), use_container_width=True)
 
 with tab4:
@@ -590,19 +543,19 @@ with tab4:
         "Summe Einmal [€]":[n_units*(zpl_ne+subm_ne+(imsys_ne if sec42b else 0.0)) + (smgw_cent if sec42b else 0.0)+it_setup_ggv+legal_once+proj_mk+gen_meter+pv_capex_ggv,
                              n_units*(zpl_ne_ms+subm_ne_ms+(imsys_ne_ms if sec42b else 0.0)) + (smgw_cent_ms if sec42b else 0.0)+it_setup_ms+legal_once_ms+proj_mk_ms+gen_meter_ms+pv_capex_ms]
     })
-    st.dataframe(df_once, use_container_width=True)
-    st.dataframe(df_once_tot, use_container_width=True)
+    st.dataframe(df_once.style.format({"GGV [€]":"{:,.2f}","Mieterstrom [€]":"{:,.2f}"}), use_container_width=True)
+    st.dataframe(df_once_tot.style.format({"Summe Einmal [€]":"{:,.2f}"}), use_container_width=True)
 
 with tab5:
     st.markdown("### Eigenkapital-Cashflows & Schuldendienst")
+    ggv_merge = ek_ggv["eq_df"].merge(ek_ggv["schedule"], how="left", on="Jahr").fillna(0.0)
+    ms_merge  = ek_ms["eq_df"].merge(ek_ms["schedule"],  how="left", on="Jahr").fillna(0.0)
     st.write("**GGV – EK‑CF und Schuldendienst**")
-    st.dataframe(ek_ggv["eq_df"].merge(ek_ggv["schedule"], how="left", on="Jahr").fillna(0.0).style.format({
-        "EK-CF [€]":"{:,.0f}","Zins":"{:,.0f}","Tilgung":"{:,.0f}","Schuldendienst":"{:,.0f}","Restschuld":"{:,.0f}"
-    }), use_container_width=True)
+    st.dataframe(ggv_merge.style.format({"EK-CF [€]":"{:,.2f}","Zins":"{:,.2f}","Tilgung":"{:,.2f}","Schuldendienst":"{:,.2f}","Restschuld":"{:,.2f}"}),
+                 use_container_width=True)
     st.write("**Mieterstrom – EK‑CF und Schuldendienst**")
-    st.dataframe(ek_ms["eq_df"].merge(ek_ms["schedule"], how="left", on="Jahr").fillna(0.0).style.format({
-        "EK-CF [€]":"{:,.0f}","Zins":"{:,.0f}","Tilgung":"{:,.0f}","Schuldendienst":"{:,.0f}","Restschuld":"{:,.0f}"
-    }), use_container_width=True)
+    st.dataframe(ms_merge.style.format({"EK-CF [€]":"{:,.2f}","Zins":"{:,.2f}","Tilgung":"{:,.2f}","Schuldendienst":"{:,.2f}","Restschuld":"{:,.2f}"}),
+                 use_container_width=True)
 
 # -----------------------------
 # Export
