@@ -1,9 +1,8 @@
-# Qrauts – GGV vs. Mieterstrom (v11)
+# G9 – Tooltips & Hover-Formatting
 
-**Neu in v11**
-- **Kosten-Kacheln oben**: Einmalkosten (LG) und laufende Kosten pro Jahr (LG) für **GGV** und **Mieterstrom** direkt sichtbar.
-- **PDF-Report erweitert**: zusätzliche **Kostenübersichts-Seite** mit Branding.
-- Beibehalt: Kundendaten-/Projektfelder, optionale Teilnehmererfassung pro Person, KPIs & Charts, CSO-Kontaktseite.
+**Neu in v9**
+- **Mouseover-Erklärungen** für: ROI, EK‑IRR, EK‑NPV, DSCR, NPV, EK‑Payback.
+- **Hover in Diagrammen**: €‑Werte mit zwei Nachkommastellen; kWh und % entsprechend formatiert.
 
 ## Start
 ```bash
