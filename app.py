@@ -1,224 +1,293 @@
-# app.py
+# app.py — v9_plus_fixed
 import streamlit as st
 import pandas as pd
 import numpy as np
+import plotly.express as px
 
-\1
+# PDF export libs
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+from reportlab.lib import colors
+from reportlab.lib.utils import ImageReader
+from reportlab.lib.units import mm
+import matplotlib.pyplot as plt
+import io, os
+
+st.set_page_config(page_title="GGV vs. Mieterstrom – Szenariorechner (v9+ fixed)", layout="wide")
 
 # =============================
 # Kundendaten (oben links)
 # =============================
 st.markdown("### Kundendaten")
-_col_left, _col_right = st.columns([2,3])
-with _col_left:
+col_left, col_right = st.columns([2,3])
+with col_left:
     customer_name = st.text_input("Kundenname", value="")
     customer_email = st.text_input("E‑Mail", value="")
     customer_phone = st.text_input("Telefon", value="")
     customer_address = st.text_area("Kundenadresse", value="", height=70)
     property_address = st.text_area("Adresse der Liegenschaft", value="", height=70)
     project_number = st.text_input("Projektnummer", value="")
-with _col_right:
-    st.caption("Bitte Kundendaten links eingeben. Sie werden im PDF‑Report verwendet.")
+with col_right:
+    st.caption("Bitte Kundendaten links eingeben. Sie erscheinen im PDF‑Report.")
 
-st.title("Kosten‑Simulator: GGV (§42b EnWG) vs. Mieterstrom")
-st.caption("Variabler Vergleich von Einmalkosten, laufenden Kosten (Eigentümer & Letztverbraucher). – Hinweis: Richtwerte, keine Rechts-/Steuerberatung.")
+# =============================
+# Helferfunktionen
+# =============================
+def irr_from_series(cf):
+    lo, hi = -0.99, 2.0
+    def npv_r(r): return np.sum(cf/((1+r)**np.arange(len(cf))))
+    f_lo, f_hi = npv_r(lo), npv_r(hi)
+    if f_lo*f_hi>0: return None
+    for _ in range(80):
+        mid=(lo+hi)/2; f_mid=npv_r(mid)
+        if f_lo*f_mid<=0: hi, f_hi = mid, f_mid
+        else: lo, f_lo = mid, f_mid
+    return (lo+hi)/2
 
-# ---------------------------
-# Sidebar – Struktur & Regime
-# ---------------------------
-with st.sidebar:
-    st.header("Projekt‑Rahmen")
-    kWp = st.number_input("Systemgröße [kWp]", min_value=1.0, value=99.0, step=1.0)
-    n_we = st.number_input("Anzahl Wohneinheiten", min_value=1, value=30, step=1)
-    prod_spec = st.number_input("Spezifischer Ertrag [kWh/kWp·a]", min_value=500, value=1000, step=10)
-    prod_total = kWp * prod_spec
+def irr_from_df(df):
+    return irr_from_series(df.sort_values("Jahr")["Netto Cashflow"].values.astype(float))
 
-    st.markdown("---")
-    st.header("Regulatorik")
-    imsys_required = st.checkbox("§42b EnWG aktiv → viertelstündliche Messung für Teilnehmer (iMSys)", value=True)
-    dv_required = st.checkbox("Direktvermarktungspflicht aktiv (typ. >100 kWp)", value=False)
+def npv_and_payback(df, discount_rate):
+    npv=0.0; cum=0.0; pb=None
+    for _,row in df.sort_values("Jahr").iterrows():
+        y=int(row["Jahr"]); cf=float(row["Netto Cashflow"])
+        npv += cf/((1+discount_rate)**y)
+        cum += cf
+        if pb is None and cum>=0 and y>0:
+            pb=y
+    return npv, pb
 
-    st.markdown("---")
-    st.header("Preisannahmen (laufende Kosten)")
-    ms_erzeug_j = st.number_input("Messstellenbetrieb Erzeugungszähler [€/a]", min_value=0.0, value=120.0, step=10.0)
-    smgw_gate_j = st.number_input("Gatewaybetrieb (zentral) [€/a]", min_value=0.0, value=120.0, step=10.0)
-    it_saas_ggv_j = st.number_input("IT/SaaS Abrechnung GGV [€/a]", min_value=0.0, value=1800.0, step=50.0)
-    it_saas_ms_j = st.number_input("IT/SaaS Abrechnung Mieterstrom [€/a]", min_value=0.0, value=2700.0, step=50.0)
-    dv_fix_j = st.number_input("Direktvermarktung fix [€/a]", min_value=0.0, value=0.0, step=50.0)
-    dv_var_ct = st.number_input("Direktvermarktung variabel [ct/kWh]", min_value=0.0, value=0.4, step=0.1)
+def eur2(v):
+    try:
+        s=f"{float(v):,.2f}"
+        return s.replace(",", "X").replace(".", ",").replace("X", ".")
+    except:
+        return "n/a"
 
-    st.markdown("---")
-    st.header("Preisannahmen (Einmalkosten)")
-    zpl_ert = st.number_input("Zählerplatz‑Ertüchtigung je WE [€]", min_value=0.0, value=700.0, step=50.0)
-    submeter_we = st.number_input("Untermessung/Submeter je WE [€]", min_value=0.0, value=180.0, step=10.0)
-    imsys_up_we = st.number_input("iMSys‑Upgrade je WE [€]", min_value=0.0, value=350.0, step=10.0)
-    erz_zaehler = st.number_input("Erzeugungszähler (Einbau) [€]", min_value=0.0, value=250.0, step=10.0)
-    smgw_central = st.number_input("Smart‑Meter‑Gateway (zentral) [€]", min_value=0.0, value=600.0, step=10.0)
-    it_setup_ggv = st.number_input("IT/Abrechnungs‑Setup GGV [€]", min_value=0.0, value=4000.0, step=100.0)
-    it_setup_ms = st.number_input("IT/Abrechnungs‑Setup Mieterstrom [€]", min_value=0.0, value=5600.0, step=100.0)
-    legal_setup = st.number_input("Rechts-/Reg‑Setup [€]", min_value=0.0, value=2500.0, step=100.0)
-    proj_mk = st.number_input("Projektierung Messkonzept [€]", min_value=0.0, value=3000.0, step=100.0)
+def build_scenario(
+    label, kWp, specific_yield_kwh_per_kwp, self_consumption_share, grid_share_override,
+    grundversorgung_ct_per_kwh, eeg_feed_in_ct_per_kwh, dm_fee_ct_per_kwh, internal_price_ct_per_kwh,
+    mieterstrom_price_cap_factor, mieterstrom_premium_ct_per_kwh, capex_eur, opex_fixed_eur,
+    lifetime_years, degradation_pct_per_year, inflation_pct, price_growth_pct, discount_rate_pct,
+    is_mieterstrom, battery_shift_share_pp, storage_lcos_eur_per_kwh, index_eeg_price=False,
+    index_ms_premium=False, ms_full_supply=False, ne_count=1, cons_per_ne_kwh=2000, procurement_ct_per_kwh=28.0
+):
+    annual_production_kwh = kWp * specific_yield_kwh_per_kWp = specific_yield_kwh_per_kwp
+    deg = degradation_pct_per_year / 100.0
+    infl = inflation_pct / 100.0
+    price_growth = price_growth_pct / 100.0
 
-    st.markdown("---")
-    st.header("Letztverbraucher‑Entgelte (MsbG)")
-    entgelt_mme = st.number_input("Messentgelt mME je WE [€/a]", min_value=0.0, value=20.0, step=5.0)
-    entgelt_imsys = st.number_input("Messentgelt iMSys je WE [€/a]", min_value=0.0, value=60.0, step=5.0)
-    grundpreis_ms = st.number_input("Grundpreis Mieterstrom je WE [€/a] (optional)", min_value=0.0, value=0.0, step=5.0)
-
-# ---------------------------
-# Helper
-# ---------------------------
-def df_one_time(model):
-    rows = []
-    rows.append(["Zählerplatz‑Ertüchtigung (VDE‑AR‑N 4100)", n_we, zpl_ert, n_we*zpl_ert])
-    rows.append(["Erzeugungszähler PV (Einbau)", 1, erz_zaehler, erz_zaehler])
-    rows.append(["Projektierung & Messkonzept", 1, proj_mk, proj_mk])
-    rows.append(["Rechts-/Reg‑Setup", 1, legal_setup, legal_setup])
-    rows.append(["Untermessung/Submeter je WE", n_we, submeter_we, n_we*submeter_we])
-    if imsys_required:
-        rows.append(["iMSys‑Upgrade je WE", n_we, imsys_up_we, n_we*imsys_up_we])
-        rows.append(["Smart‑Meter‑Gateway (zentral)", 1, smgw_central, smgw_central])
-    if model == "GGV":
-        rows.append(["IT/Abrechnungs‑Setup GGV", 1, it_setup_ggv, it_setup_ggv])
+    sc_share = np.clip(self_consumption_share/100.0, 0, 1)
+    if grid_share_override is not None:
+        grid_share = grid_share_override/100.0
+        sc_share = 1 - grid_share
     else:
-        rows.append(["IT/Abrechnungs‑Setup Mieterstrom", 1, it_setup_ms, it_setup_ms])
-    return pd.DataFrame(rows, columns=["Kostenposition", "Menge", "Einheitspreis [€]", "Summe [€]"])
+        grid_share = 1 - sc_share
 
-def df_owner_recurring(model):
+    eeg_price = eeg_feed_in_ct_per_kwh / 100.0
+    dm_fee = dm_fee_ct_per_kwh / 100.0
+    internal_price = internal_price_ct_per_kwh / 100.0
+    grund = grundversorgung_ct_per_kwh / 100.0
+    cap_factor = mieterstrom_price_cap_factor
+    premium = mieterstrom_premium_ct_per_kwh / 100.0
+    procurement = procurement_ct_per_kwh / 100.0
+
+    export_price_base = max(eeg_price - dm_fee, 0.0)
+
     rows = []
-    rows.append(["Messstellenbetrieb Erzeugungszähler", 1, ms_erzeug_j, ms_erzeug_j])
-    if imsys_required:
-        rows.append(["Gatewaybetrieb (SMGw zentral)", 1, smgw_gate_j, smgw_gate_j])
-    if model == "GGV":
-        rows.append(["IT/SaaS Abrechnung (GGV)", 1, it_saas_ggv_j, it_saas_ggv_j])
-    else:
-        rows.append(["IT/SaaS Abrechnung (Mieterstrom)", 1, it_saas_ms_j, it_saas_ms_j])
-    if dv_required:
-        rows.append(["Direktvermarktung fix", 1, dv_fix_j, dv_fix_j])
-        dv_var_eur = (dv_var_ct/100.0)*prod_total
-        rows.append(["Direktvermarktung variabel", prod_total, f"{dv_var_ct} ct/kWh", dv_var_eur])
-    return pd.DataFrame(rows, columns=["Kostenposition", "Menge", "Einheitspreis", "Summe [€]"])
+    for year in range(0, lifetime_years+1):
+        prod = 0.0 if year == 0 else annual_production_kwh * ((1 - deg) ** (year-1))
+        sc_kwh = prod * sc_share
+        grid_kwh = prod * grid_share
 
-def df_consumer_recurring(model):
-    entgelt = entgelt_imsys if imsys_required else entgelt_mme
-    rows = [["Messentgelt je WE (MsbG)", n_we, entgelt, n_we*entgelt]]
-    if model == "Mieterstrom" and grundpreis_ms > 0:
-        rows.append(["Grundpreis Mieterstrom je WE", n_we, grundpreis_ms, n_we*grundpreis_ms])
-    return pd.DataFrame(rows, columns=["Kostenposition", "Menge", "Einheitspreis [€]", "Summe [€]"])
+        gs_y = grund * ((1 + price_growth) ** max(0, year-1))
+        cap_y = cap_factor * gs_y
 
-# ---------------------------
-# Build dataframes
-# ---------------------------
-ot_ggv = df_one_time("GGV")
-ot_ms = df_one_time("Mieterstrom")
-ro_ggv = df_owner_recurring("GGV")
-ro_ms = df_owner_recurring("Mieterstrom")
-rc_ggv = df_consumer_recurring("GGV")
-rc_ms = df_consumer_recurring("Mieterstrom")
+        internal_y_base = internal_price * ((1 + price_growth) ** max(0, year-1))
+        internal_y = min(internal_y_base, cap_y) if is_mieterstrom else internal_y_base
 
-sum_ot_ggv = ot_ggv["Summe [€]"].apply(lambda x: float(str(x).split()[0])).sum()
-sum_ot_ms  = ot_ms["Summe [€]"].apply(lambda x: float(str(x).split()[0])).sum()
-sum_ro_ggv = pd.to_numeric(ro_ggv["Summe [€]"], errors="coerce").sum()
-sum_ro_ms  = pd.to_numeric(ro_ms["Summe [€]"], errors="coerce").sum()
-sum_rc_ggv = rc_ggv["Summe [€]"].sum()
-sum_rc_ms  = rc_ms["Summe [€]"].sum()
+        export_y = export_price_base * ((1 + price_growth) ** max(0, year-1)) if index_eeg_price else export_price_base
+        prem_y = premium * ((1 + infl) ** max(0, year-1)) if index_ms_premium else premium
 
-# ---------------------------
+        internal_rev = sc_kwh * internal_y
+        export_rev = grid_kwh * export_y
+        premium_rev = (sc_kwh * prem_y) if is_mieterstrom else 0.0
+
+        nonpv_rev = 0.0; nonpv_cost = 0.0
+        if is_mieterstrom and ms_full_supply and year>0:
+            total_cons = ne_count * cons_per_ne_kwh
+            comp_kwh = max(total_cons - sc_kwh, 0.0)
+            procurement_y = procurement * ((1 + price_growth) ** max(0, year-1))
+            nonpv_rev = comp_kwh * internal_y
+            nonpv_cost = comp_kwh * procurement_y
+
+        total_rev = internal_rev + export_rev + premium_rev + nonpv_rev
+
+        opex_y = 0.0 if year==0 else opex_fixed_eur * ((1 + infl) ** max(0, year-1))
+        if year>0 and battery_shift_share_pp>0 and storage_lcos_eur_per_kwh>0:
+            shifted_kwh = prod * (battery_shift_share_pp/100.0)
+            opex_y += shifted_kwh * storage_lcos_eur_per_kwh
+
+        capex_y = capex_eur if year == 0 else 0.0
+        net_cf = total_rev - opex_y - nonpv_cost - capex_y
+
+        rows.append({
+            "Szenario": label, "Jahr": year,
+            "Produktion [kWh]": prod, "EV [kWh]": sc_kwh, "Einspeisung [kWh]": grid_kwh,
+            "Erlös intern [€]": internal_rev + nonpv_rev, "Einspeiseerlös [€]": export_rev,
+            "Mieterstromzuschlag [€]": premium_rev, "Beschaffung nicht‑PV [€]": nonpv_cost,
+            "OPEX [€]": opex_y, "CAPEX [€]": capex_y, "Umsatz gesamt [€]": total_rev, "Netto Cashflow": net_cf
+        })
+    df = pd.DataFrame(rows)
+    irr = irr_from_df(df)
+    npv, pb = npv_and_payback(df, discount_rate_pct/100.0)
+    return df, irr, npv, pb
+
+# =============================
+# Sidebar Eingaben (kompakt)
+# =============================
+st.sidebar.title("Eingaben – Anlage & Preise")
+with st.sidebar.expander("Projekt & Anlage", expanded=True):
+    n_units = st.number_input("Anzahl Nutzeinheiten (NE)", min_value=1, value=30, step=1)
+    kWp = st.number_input("Anlagengröße [kWp]", min_value=1.0, value=99.0, step=1.0)
+    specific_yield = st.number_input("Spezifischer Ertrag [kWh/kWp·a]", min_value=400.0, value=600.0, step=10.0)
+with st.sidebar.expander("Regulatorik", expanded=True):
+    sec42b = st.checkbox("§42b EnWG aktiv (iMSys je NE, 15‑min)", value=True)
+    dv_required = st.checkbox("Direktvermarktung aktiv (typ. >100 kWp)", value=False)
+with st.sidebar.expander("Preise & Zuschläge", expanded=True):
+    grundversorgung_ct = st.number_input("Grundversorgung [ct/kWh]", min_value=10.0, value=40.0, step=0.1)
+    ggv_price_ct = st.number_input("Interner Preis GGV [ct/kWh]", min_value=0.0, value=27.0, step=0.1)
+    ms_price_ct  = st.number_input("Endkundenpreis Mieterstrom [ct/kWh] (≤90% Grundversorgung)", min_value=0.0, value=29.0, step=0.1)
+    eeg_feed_ct = st.number_input("EEG-Vergütung [ct/kWh]", min_value=0.0, value=7.0, step=0.1)
+    dm_fee_ct = st.number_input("Direktvermarktung [ct/kWh] (bei DV)", min_value=0.0, value=0.4, step=0.1)
+    ms_premium_ct = st.number_input("Mieterstromzuschlag [ct/kWh]", min_value=0.0, value=3.0, step=0.1)
+with st.sidebar.expander("EV-Anteil & Batterie", expanded=True):
+    sc_share_base = st.slider("Eigenverbrauchsanteil Basis [%]", 0, 100, 35)
+    use_override = st.checkbox("Einspeiseanteil-Override", value=True)
+    grid_share_override = st.slider("Override Einspeiseanteil [%]", 0, 100, 65) if use_override else None
+    battery_enabled = st.checkbox("Batterie/Optimierung aktiv (ΔEV)", value=False)
+    delta_ev_pp = st.slider("ΔEV durch Batterie [%‑Pkte]", 0, 60, 10) if battery_enabled else 0
+    storage_lcos = st.number_input("LCOS Speicher [€/kWh]", min_value=0.0, value=0.00, step=0.01, format="%.2f")
+with st.sidebar.expander("Inflation & Diskontierung", expanded=True):
+    global_infl = st.number_input("Inflation [%/a]", min_value=0.0, value=2.0, step=0.1)
+    price_growth = st.number_input("Preiswachstum [%/a]", min_value=0.0, value=2.0, step=0.1)
+    discount = st.number_input("Diskontsatz (NPV) [%/a]", min_value=0.0, value=6.0, step=0.1)
+
+with st.sidebar.expander("Kosten – Detailliert (CAPEX/OPEX)", expanded=True):
+    colA, colB = st.columns(2)
+    with colA:
+        zpl_ne = st.number_input("ZPL je NE [€]", min_value=0.0, value=700.0, step=50.0)
+        subm_ne = st.number_input("Submeter je NE [€]", min_value=0.0, value=180.0, step=10.0)
+        imsys_ne = st.number_input("iMSys‑Upgrade je NE [€]", min_value=0.0, value=350.0, step=10.0)
+        smgw_cent = st.number_input("SMGw zentral [€]", min_value=0.0, value=600.0, step=10.0)
+        it_setup = st.number_input("IT/Abrechnung Setup [€]", min_value=0.0, value=4000.0, step=100.0)
+        legal_once = st.number_input("Recht/Reg Setup [€]", min_value=0.0, value=2500.0, step=100.0)
+        proj_mk = st.number_input("Projektierung Messkonzept [€]", min_value=0.0, value=3000.0, step=100.0)
+        gen_meter = st.number_input("Erzeugungszähler (Einbau) [€]", min_value=0.0, value=250.0, step=10.0)
+        pv_capex = st.number_input("PV‑Anlage [€]", min_value=0.0, value=45000.0, step=100.0, format="%.2f")
+    with colB:
+        msb_gen = st.number_input("MSB Erzeugungszähler [€/a]", min_value=0.0, value=120.0, step=10.0)
+        smgw_gate = st.number_input("Gatewaybetrieb (zentral) [€/a]", min_value=0.0, value=120.0, step=10.0)
+        it_saas = st.number_input("IT/SaaS Abrechnung [€/a]", min_value=0.0, value=1600.0, step=50.0)
+        dv_fix = st.number_input("Direktvermarktung fix [€/a]", min_value=0.0, value=0.0, step=50.0)
+        opex_other = st.number_input("Weitere OPEX [€/a]", min_value=0.0, value=800.0, step=50.0)
+
+# CAPEX/OPEX Totale (ein Modell; v9-Charakter)
+capex_total = (n_units*(zpl_ne+subm_ne+(imsys_ne if sec42b else 0.0)) + (smgw_cent if sec42b else 0.0)
+               + it_setup + legal_once + proj_mk + gen_meter + pv_capex)
+opex_total = (msb_gen + (smgw_gate if sec42b else 0.0) + it_saas + (dv_fix if dv_required else 0.0) + opex_other)
+
+# Szenarien bauen
+sc_share = np.clip(sc_share_base + (delta_ev_pp if battery_enabled else 0), 0, 100)
+grid_override = grid_share_override if use_override else None
+
+df_ggv, irr_ggv, npv_ggv, pb_ggv = build_scenario(
+    "GGV", kWp, specific_yield, sc_share, grid_override,
+    grundversorgung_ct, eeg_feed_ct, (dm_fee_ct if dv_required else 0.0), ggv_price_ct,
+    mieterstrom_price_cap_factor=0.9, mieterstrom_premium_ct_per_kwh=0.0,
+    capex_eur=capex_total, opex_fixed_eur=opex_total, lifetime_years=30, degradation_pct_per_year=0.5,
+    inflation_pct=global_infl, price_growth_pct=price_growth, discount_rate_pct=discount,
+    is_mieterstrom=False, battery_shift_share_pp=(delta_ev_pp if battery_enabled else 0),
+    storage_lcos_eur_per_kwh=0.0, index_eeg_price=False, index_ms_premium=False,
+    ms_full_supply=False, ne_count=n_units, cons_per_ne_kwh=2000, procurement_ct_per_kwh=28.0
+)
+
+df_ms, irr_ms, npv_ms, pb_ms = build_scenario(
+    "Mieterstrom", kWp, specific_yield, sc_share, grid_override,
+    grundversorgung_ct, eeg_feed_ct, (dm_fee_ct if dv_required else 0.0), ms_price_ct,
+    mieterstrom_price_cap_factor=0.9, mieterstrom_premium_ct_per_kwh=ms_premium_ct,
+    capex_eur=capex_total, opex_fixed_eur=opex_total, lifetime_years=30, degradation_pct_per_year=0.5,
+    inflation_pct=global_infl, price_growth_pct=price_growth, discount_rate_pct=discount,
+    is_mieterstrom=True, battery_shift_share_pp=(delta_ev_pp if battery_enabled else 0),
+    storage_lcos_eur_per_kwh=0.0, index_eeg_price=False, index_ms_premium=True,
+    ms_full_supply=False, ne_count=n_units, cons_per_ne_kwh=2000, procurement_ct_per_kwh=28.0
+)
+
+df_all = pd.concat([df_ggv, df_ms], ignore_index=True)
+
 # KPIs
-# ---------------------------
-c1, c2, c3, c4, c5, c6 = st.columns(6)
-c1.metric("Einmalkosten – GGV [€]", f"{sum_ot_ggv:,.0f}")
-c2.metric("Einmalkosten – Mieterstrom [€]", f"{sum_ot_ms:,.0f}")
-c3.metric("Eigentümer laufend – GGV [€/a]", f"{sum_ro_ggv:,.0f}")
-c4.metric("Eigentümer laufend – MS [€/a]", f"{sum_ro_ms:,.0f}")
-c5.metric("Letztverbraucher laufend – GGV [€/a]", f"{sum_rc_ggv:,.0f}")
-c6.metric("Letztverbraucher laufend – MS [€/a]", f"{sum_rc_ms:,.0f}")
+st.subheader("KPIs – NE & LG")
+cap_now = 0.9*grundversorgung_ct
+col1, col2, col3, col4 = st.columns(4)
+with col1:
+    st.metric("MS‑Preisdeckel [ct/kWh]", f"{cap_now:.1f}")
+with col2:
+    st.metric("NPV GGV (LG) [€]", eur2(npv_ggv))
+with col3:
+    st.metric("NPV MS (LG) [€]", eur2(npv_ms))
+with col4:
+    st.metric("Payback GGV / MS [a]", f"{('n/a' if pb_ggv is None else pb_ggv)} / {('n/a' if pb_ms is None else pb_ms)}")
 
-st.markdown("---")
-
-# ---------------------------
-# Tabs with tables
-# ---------------------------
-tab1, tab2, tab3, tab4 = st.tabs(["Einmalkosten", "Laufend Eigentümer", "Laufend Letztverbraucher", "Export"])
-
+# Charts
+tab1, tab2 = st.tabs(["Cashflows", "Energieflüsse"])
 with tab1:
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.subheader("GGV – Einmalkosten")
-        st.dataframe(ot_ggv, use_container_width=True)
-    with col_b:
-        st.subheader("Mieterstrom – Einmalkosten")
-        st.dataframe(ot_ms, use_container_width=True)
-
+    df_plot = df_all[df_all["Jahr"]>0].copy()
+    fig_cf = px.line(df_plot, x="Jahr", y="Netto Cashflow", color="Szenario", title="Jährlicher Netto‑Cashflow")
+    fig_cf.update_traces(hovertemplate="Jahr=%{x}<br>Netto‑CF=%{y:,.2f} €<extra></extra>")
+    st.plotly_chart(fig_cf, use_container_width=True)
+    df_plot["Kumuliert [€]"] = df_plot.groupby("Szenario")["Netto Cashflow"].cumsum()
+    fig_cum = px.line(df_plot, x="Jahr", y="Kumuliert [€]", color="Szenario", title="Kumulierter Cashflow")
+    fig_cum.update_traces(hovertemplate="Jahr=%{x}<br>Kumuliert=%{y:,.2f} €<extra></extra>")
+    st.plotly_chart(fig_cum, use_container_width=True)
 with tab2:
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.subheader("GGV – laufende Kosten Eigentümer")
-        st.dataframe(ro_ggv, use_container_width=True)
-    with col_b:
-        st.subheader("Mieterstrom – laufende Kosten Eigentümer")
-        st.dataframe(ro_ms, use_container_width=True)
-
-with tab3:
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.subheader("GGV – laufende Kosten Letztverbraucher (gesamt)")
-        st.dataframe(rc_ggv, use_container_width=True)
-    with col_b:
-        st.subheader("Mieterstrom – laufende Kosten Letztverbraucher (gesamt)")
-        st.dataframe(rc_ms, use_container_width=True)
-
-with tab4:
-    st.write("Exportiere die Tabellen als CSV:")
-    st.download_button("Einmalkosten GGV (CSV)", ot_ggv.to_csv(index=False).encode("utf-8"), file_name="einmal_ggv.csv", mime="text/csv")
-    st.download_button("Einmalkosten Mieterstrom (CSV)", ot_ms.to_csv(index=False).encode("utf-8"), file_name="einmal_mieterstrom.csv", mime="text/csv")
-    st.download_button("Eigentümer laufend GGV (CSV)", ro_ggv.to_csv(index=False).encode("utf-8"), file_name="laufend_eigent_ggv.csv", mime="text/csv")
-    st.download_button("Eigentümer laufend Mieterstrom (CSV)", ro_ms.to_csv(index=False).encode("utf-8"), file_name="laufend_eigent_ms.csv", mime="text/csv")
-    st.download_button("Letztverbraucher laufend GGV (CSV)", rc_ggv.to_csv(index=False).encode("utf-8"), file_name="laufend_verbraucher_ggv.csv", mime="text/csv")
-    st.download_button("Letztverbraucher laufend Mieterstrom (CSV)", rc_ms.to_csv(index=False).encode("utf-8"), file_name="laufend_verbraucher_ms.csv", mime="text/csv")
-
-st.markdown("""
-**Interpretation:**  
-- §42b EnWG → viertelstündliche Messung impliziert iMSys auf Teilnehmerseite (höhere Messentgelte, SMGw).  
-- Mieterstrom erfordert i. d. R. höheres IT-/Backend‑Niveau (Marktkommunikation), daher laufend teurer.  
-- Zählerplatz‑Ertüchtigung nach VDE‑AR‑N 4100 fällt unabhängig vom Modell an (Gebäudeeigentümerpflicht).
-""")
-
+    df_energy = df_all[df_all["Jahr"]>0].copy()
+    df_energy = df_energy.melt(id_vars=["Szenario","Jahr"], value_vars=["EV [kWh]","Einspeisung [kWh]"], var_name="Art", value_name="kWh")
+    fig_e = px.area(df_energy, x="Jahr", y="kWh", color="Art", facet_col="Szenario", facet_col_wrap=2, title="Energieflüsse")
+    fig_e.update_traces(hovertemplate="Jahr=%{x}<br>%{fullData.name}=%{y:,.2f} kWh<extra></extra>")
+    st.plotly_chart(fig_e, use_container_width=True)
 
 # =============================
-# PDF‑Export (Charts, Parameter, KPIs, Visitenkarte)
+# PDF Export
 # =============================
-def _fig_cashflow_png(_df_plot):
+def draw_header(c, title):
+    c.setFillColor(colors.HexColor("#f58220")); c.rect(0, A4[1]-18*mm, A4[0], 18*mm, fill=1, stroke=0)
+    c.setFillColor(colors.white); c.setFont("Helvetica-Bold", 12)
+    c.drawString(15*mm, A4[1]-11*mm, "Szenariorechner – GGV vs. Mieterstrom")
+    c.setFont("Helvetica", 11); c.drawRightString(A4[0]-15*mm, A4[1]-11*mm, title)
+
+def fig_cashflow_png(dfall):
     fig, ax = plt.subplots(figsize=(6,3))
-    for scen, d in _df_plot.groupby("Szenario"):
-        ax.plot(d["Jahr"], d["Netto Cashflow"], label=scen)
+    d = dfall[dfall["Jahr"]>0].copy()
+    for scen, s in d.groupby("Szenario"):
+        ax.plot(s["Jahr"], s["Netto Cashflow"], label=scen)
     ax.set_title("Netto‑Cashflow pro Jahr"); ax.set_xlabel("Jahr"); ax.set_ylabel("€")
     ax.grid(True, alpha=0.3); ax.legend()
     buf = io.BytesIO(); fig.tight_layout(); fig.savefig(buf, format="png", dpi=200); plt.close(fig); buf.seek(0); return buf
 
-def _fig_cum_png(_df_plot):
+def fig_cum_png(dfall):
     fig, ax = plt.subplots(figsize=(6,3))
-    d=_df_plot.copy(); d["Kum"]=d.groupby("Szenario")["Netto Cashflow"].cumsum()
+    d = dfall[dfall["Jahr"]>0].copy(); d["Kum"]=d.groupby("Szenario")["Netto Cashflow"].cumsum()
     for scen, s in d.groupby("Szenario"):
         ax.plot(s["Jahr"], s["Kum"], label=scen)
     ax.set_title("Kumulierter Cashflow"); ax.set_xlabel("Jahr"); ax.set_ylabel("€")
     ax.grid(True, alpha=0.3); ax.legend()
     buf = io.BytesIO(); fig.tight_layout(); fig.savefig(buf, format="png", dpi=200); plt.close(fig); buf.seek(0); return buf
 
-def _draw_header(c, title):
-    # Qrauts‑ähnlicher Akzentbalken
-    c.setFillColor(colors.HexColor("#f58220")); c.rect(0, A4[1]-18*mm, A4[0], 18*mm, fill=1, stroke=0)
-    c.setFillColor(colors.white); c.setFont("Helvetica-Bold", 12)
-    c.drawString(15*mm, A4[1]-11*mm, "Szenariorechner – GGV vs. Mieterstrom")
-    c.setFont("Helvetica", 11); c.drawRightString(A4[0]-15*mm, A4[1]-11*mm, title)
-
-def _build_pdf():
-    # Erwartet: df_all, df_ggv, df_ms, npv_ggv, npv_ms, pb_ggv, pb_ms, irr_ggv, irr_ms,
-    #           sowie Parameter wie n_units, kWp, specific_yield, etc. (aus dieser App vorhanden)
+def build_pdf():
     buf = io.BytesIO(); c = canvas.Canvas(buf, pagesize=A4)
 
     # Cover mit Kundendaten
-    _draw_header(c, "Projekt-Cover")
+    draw_header(c, "Projekt-Cover")
     c.setFont("Helvetica-Bold", 18); c.setFillColor(colors.black)
     c.drawString(20*mm, A4[1]-30*mm, "Projektbericht: GGV vs. Mieterstrom")
     c.setFont("Helvetica", 11); y=A4[1]-45*mm
@@ -234,93 +303,78 @@ def _build_pdf():
     y-=6*mm; c.drawString(20*mm, y, f"Projektnummer: {project_number}")
     c.showPage()
 
-    # Parameter
-    _draw_header(c, "Parameter & Annahmen")
+    # Parameter & KPIs
+    draw_header(c, "Parameter & KPIs")
     c.setFont("Helvetica-Bold", 14); c.drawString(20*mm, A4[1]-30*mm, "Wesentliche Parameter")
     c.setFont("Helvetica", 11); y=A4[1]-40*mm
-    def _line(t):
+    def line(t):
         nonlocal y; c.drawString(20*mm, y, t); y-=6*mm
-    try:
-        _line(f"NE (Anzahl): {n_units}")
-        _line(f"Leistung [kWp]: {kWp}")
-        _line(f"Spez. Ertrag [kWh/kWp·a]: {specific_yield}")
-        _line(f"Grundversorgung [ct/kWh]: {grundversorgung_ct}")
-        _line(f"Preis GGV [ct/kWh]: {ggv_price_ct_base}")
-        _line(f"Preis MS [ct/kWh]: {ms_price_ct_base}")
-        _line(f"EEG‑Vergütung [ct/kWh]: {eeg_feed_ct}; MS‑Zuschlag [ct/kWh]: {mieterstrom_premium_ct}")
-        _line(f"EV‑Anteil Basis [%]: {sc_share_base}; Einspeise‑Override [%]: {grid_share_override if 'grid_share_override' in globals() else '-'}")
-        _line(f"Inflation/Preiswachstum [%/a]: {global_infl if 'global_infl' in globals() else inflation} / {global_infl if 'global_infl' in globals() else price_growth}")
-        _line(f"Diskontsatz [%/a]: {discount}")
-    except Exception as e:
-        _line(f"(Hinweis: Einige Parameter konnten nicht gelesen werden: {e})")
+    line(f"NE (Anzahl): {n_units}")
+    line(f"Leistung [kWp]: {kWp}")
+    line(f"Spez. Ertrag [kWh/kWp·a]: {specific_yield}")
+    line(f"Grundversorgung [ct/kWh]: {grundversorgung_ct}")
+    line(f"Preis GGV [ct/kWh]: {ggv_price_ct}")
+    line(f"Preis MS [ct/kWh]: {ms_price_ct}")
+    line(f"EEG [ct/kWh]: {eeg_feed_ct}; DV [ct/kWh]: {dm_fee_ct}")
+    line(f"MS‑Zuschlag [ct/kWh]: {ms_premium_ct}")
+    line(f"EV‑Anteil Basis [%]: {sc_share_base}; Override [%]: {grid_share_override if grid_share_override is not None else '-'}")
+    line(f"Inflation/Preiswachstum [%/a]: {global_infl} / {price_growth}")
+    line(f"Diskontsatz [%/a]: {discount}")
+    y -= 4*mm
+    line(f"NPV GGV (LG) [€]: {eur2(npv_ggv)}")
+    line(f"NPV MS (LG) [€]: {eur2(npv_ms)}")
+    line(f"Payback GGV / MS [a]: {('n/a' if pb_ggv is None else pb_ggv)} / {('n/a' if pb_ms is None else pb_ms)}")
     c.showPage()
 
-    # KPIs + Charts
-    _draw_header(c, "KPIs & Charts")
-    c.setFont("Helvetica", 11)
-    y=A4[1]-30*mm
-    try:
-        _line = lambda t: (c.drawString(20*mm, _y:=y, text:=t), None)
-    except:
-        pass
-    cap_now = 0.9*grundversorgung_ct if 'grundversorgung_ct' in globals() else None
-    if cap_now is not None:
-        c.drawString(20*mm, y, f"MS‑Preisdeckel [ct/kWh]: {cap_now:.1f}"); y-=6*mm
-    if 'npv_ggv' in globals() and 'npv_ms' in globals():
-        from math import isnan
-        def _eur2(v):
-            try:
-                s=f"{float(v):,.2f}"; return s.replace(',', 'X').replace('.', ',').replace('X', '.')
-            except: return 'n/a'
-        c.drawString(20*mm, y, f"NPV GGV [€] (LG): {_eur2(npv_ggv)}"); y-=6*mm
-        c.drawString(20*mm, y, f"NPV MS [€] (LG): {_eur2(npv_ms)}"); y-=6*mm
-    if 'pb_ggv' in globals() and 'pb_ms' in globals():
-        c.drawString(20*mm, y, f"Payback GGV / MS [a]: {pb_ggv if pb_ggv is not None else 'n/a'} / {pb_ms if pb_ms is not None else 'n/a'}"); y-=6*mm
-    if 'irr_ggv' in globals() and irr_ggv is not None and 'irr_ms' in globals() and irr_ms is not None:
-        c.drawString(20*mm, y, f"IRR GGV / MS [%]: {irr_ggv*100:.2f} / {irr_ms*100:.2f}"); y-=8*mm
-
     # Charts
+    draw_header(c, "Charts")
     try:
-        _df_plot = df_all[df_all["Jahr"]>0].copy()
-        img1 = ImageReader(_fig_cashflow_png(_df_plot))
-        img2 = ImageReader(_fig_cum_png(_df_plot))
+        img1 = ImageReader(fig_cashflow_png(df_all))
+        img2 = ImageReader(fig_cum_png(df_all))
         c.drawImage(img1, 20*mm, 40*mm, width=80*mm, height=45*mm, preserveAspectRatio=True, mask='auto')
         c.drawImage(img2, 110*mm, 40*mm, width=80*mm, height=45*mm, preserveAspectRatio=True, mask='auto')
     except Exception as e:
         c.setFont("Helvetica-Oblique", 10); c.setFillColor(colors.red)
-        c.drawString(20*mm, 40*mm, f"(Diagramme konnten nicht erstellt werden: {e})"); c.setFillColor(colors.black)
+        c.drawString(20*mm, 40*mm, f"(Diagramme konnten nicht erstellt werden: {e})")
+        c.setFillColor(colors.black)
     c.showPage()
 
-    # Kontakt / Visitenkarte
-    _draw_header(c, "Kontakt")
+    # Visitenkarte (letzte Seite)
+    draw_header(c, "Kontakt")
     c.setFont("Helvetica-Bold", 16); c.drawString(20*mm, A4[1]-30*mm, "Ihr Ansprechpartner")
     c.setFont("Helvetica", 12)
     c.drawString(20*mm, A4[1]-40*mm, "Kurt‑M. Rosenthal – Vorstand Vertrieb | CSO")
     c.drawString(20*mm, A4[1]-48*mm, "E‑Mail: krosenthal@qrauts.de")
     c.drawString(20*mm, A4[1]-56*mm, "Mobil: +49 (0)151 581 481 62")
     c.drawString(20*mm, A4[1]-64*mm, "Web: www.qrauts.de")
-    # Bildsuche: assets/KurtRosenthal.png, ./KurtRosenthal.png, /mnt/data/KurtRosenthal.png
-    _candidates = [
+    candidates = [
         os.path.join(os.path.dirname(__file__), "assets", "KurtRosenthal.png"),
         os.path.join(os.path.dirname(__file__), "KurtRosenthal.png"),
         "/mnt/data/KurtRosenthal.png",
     ]
-    for _p in _candidates:
-        if os.path.exists(_p):
-            c.drawImage(ImageReader(_p), A4[0]-80*mm, A4[1]-120*mm, width=60*mm, height=60*mm, mask='auto')
+    for p in candidates:
+        if os.path.exists(p):
+            c.drawImage(ImageReader(p), A4[0]-80*mm, A4[1]-120*mm, width=60*mm, height=60*mm, mask='auto')
             break
     c.setFont("Helvetica", 10); c.setFillColor(colors.gray)
     c.drawString(20*mm, 20*mm, "Qrauts AG | Oltmannstr. 34 | 79100 Freiburg")
     c.showPage()
-    c.save(); buf.seek(0)
-    return buf
+
+    c.save(); buf.seek(0); return buf
 
 st.markdown("---")
-_pdf_col1, _pdf_col2 = st.columns([1,3])
-with _pdf_col1:
+col_pdf1, col_pdf2 = st.columns([1,3])
+with col_pdf1:
     if st.button("📄 PDF‑Report erstellen", type="primary"):
-        _pdf_bytes = _build_pdf().getvalue()
-        st.download_button("Download PDF", data=_pdf_bytes, file_name="Qrauts_Projektbericht.pdf", mime="application/pdf")
-with _pdf_col2:
-    st.caption("Der PDF‑Report enthält: Kundendaten, Parameter, KPIs, Diagramme sowie eine Kontaktseite mit Visitenkarte.")
+        pdf_bytes = build_pdf().getvalue()
+        st.download_button("Download PDF", data=pdf_bytes, file_name="Qrauts_Projektbericht.pdf", mime="application/pdf")
+with col_pdf2:
+    st.caption("Der PDF‑Report enthält: Kundendaten, Parameter & KPIs, Charts und die Visitenkarte (letzte Seite).")
 
+# CSV Export (optional)
+st.download_button(
+    "📤 Export: Jahreswerte (CSV)",
+    data=df_all.to_csv(index=False).encode("utf-8"),
+    file_name="szenario_jahreswerte.csv",
+    mime="text/csv"
+)
