@@ -4,23 +4,7 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 
-st.set_page_config(page_title="GGV vs. Mieterstrom – Szenariorechner (v9)
-
-# BEGIN_KUNDENDATEN_BLOCK
-# Kundendaten (oben links)
-st.markdown("### Kundendaten")
-_k_left, _k_right = st.columns([2,3])
-with _k_left:
-    kundenname = st.text_input("Kundenname", value="")
-    objektadresse = st.text_area("Objektadresse", value="", height=70)
-    projektnummer = st.text_input("Projektnummer", value="")
-    kundenemail = st.text_input("Kundenemail", value="")
-    kundentelefon = st.text_input("Kundentelefon", value="")
-with _k_right:
-    st.caption("Bitte Kundendaten links eintragen.")
-# END_KUNDENDATEN_BLOCK
-
-", layout="wide")
+st.set_page_config(page_title="GGV vs. Mieterstrom – Szenariorechner (v9)", layout="wide")
 
 # -----------------------------
 # Helpers
