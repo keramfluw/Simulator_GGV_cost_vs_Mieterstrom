@@ -397,7 +397,7 @@ ne_npv_ms = npv_ms / n_units
 pb1 = "n/a" if pb_ggv is None else f"{pb_ggv} a"
 pb2 = "n/a" if pb_ms is None else f"{pb_ms} a"
 
-st.subheader("Übersicht – KPIs (NE & LG)")
+st.subheader("Qrauts AG Benchmark engine GGV vs MS")
 # NE row
 st.markdown("**NE – Nutzeinheit (pro Einheit)**")
 c1, c2, c3, c4 = st.columns(4)
